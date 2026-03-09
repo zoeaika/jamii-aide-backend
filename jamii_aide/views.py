@@ -72,6 +72,7 @@ def get_end_user_profile(user):
 class RegisterView(APIView):
     """Register new user"""
     permission_classes = [permissions.AllowAny]
+    authentication_classes = []
 
     def post(self, request):
         serializer = RegisterSerializer(data=request.data)
@@ -107,6 +108,7 @@ class RegisterView(APIView):
 class LoginView(APIView):
     """Login user"""
     permission_classes = [permissions.AllowAny]
+    authentication_classes = []
 
     def post(self, request):
         serializer = LoginSerializer(data=request.data)
@@ -136,6 +138,7 @@ class CurrentUserView(APIView):
 class GoogleLoginView(APIView):
     """Login with Google"""
     permission_classes = [permissions.AllowAny]
+    authentication_classes = []
 
     def post(self, request):
         """

@@ -1,13 +1,49 @@
 import os
-from pathlib import Path
 from datetime import timedelta
+from pathlib import Path
+from urllib.parse import parse_qs, unquote, urlparse
+
 from decouple import config
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+
+def csv_to_list(value: str):
+    return [item.strip() for item in value.split(',') if item.strip()]
+
+
+def env_bool(name: str, default: bool):
+    raw = config(name, default=str(default))
+    if isinstance(raw, bool):
+        return raw
+    return str(raw).strip().lower() in {'1', 'true', 't', 'yes', 'y', 'on'}
+
+
+def parse_database_url(database_url: str):
+    parsed = urlparse(database_url)
+    if parsed.scheme not in {'postgres', 'postgresql', 'pgsql'}:
+        raise ValueError(f'Unsupported DATABASE_URL scheme: {parsed.scheme}')
+
+    query = parse_qs(parsed.query)
+    sslmode = query.get('sslmode', [config('DB_SSLMODE', default='require')])[0]
+
+    return {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': unquote(parsed.path.lstrip('/')),
+        'USER': unquote(parsed.username or ''),
+        'PASSWORD': unquote(parsed.password or ''),
+        'HOST': parsed.hostname or '',
+        'PORT': str(parsed.port or 5432),
+        'CONN_MAX_AGE': config('DB_CONN_MAX_AGE', default=60, cast=int),
+        'OPTIONS': {
+            'sslmode': sslmode,
+        },
+    }
+
+
 SECRET_KEY = config('SECRET_KEY', default='django-insecure-your-secret-key-change-in-production')
-DEBUG = config('DEBUG', default=True, cast=bool)
-ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='localhost,127.0.0.1', cast=lambda v: [s.strip() for s in v.split(',')])
+DEBUG = env_bool('DEBUG', True)
+ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='localhost,127.0.0.1', cast=csv_to_list)
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -29,51 +65,6 @@ INSTALLED_APPS = [
 ]
 
 SITE_ID = 1
-
-# Google OAuth Settings
-SOCIALACCOUNT_PROVIDERS = {
-    'google': {
-        'SCOPE': [
-            'profile',
-            'email',
-        ],
-        'AUTH_PARAMS': {
-            'access_type': 'online',
-        },
-        'FIELDS': [
-            'email',
-            'first_name',
-            'last_name',
-            'picture',
-        ]
-    }
-}
-
-# Rest Framework Settings
-REST_FRAMEWORK = {
-    'DEFAULT_AUTHENTICATION_CLASSES': [
-        'rest_framework_simplejwt.authentication.JWTAuthentication',
-    ],
-    'DEFAULT_PERMISSION_CLASSES': [
-        'rest_framework.permissions.AllowAny',
-    ],
-    'DEFAULT_FILTER_BACKENDS': [
-        'django_filters.rest_framework.DjangoFilterBackend',
-        'rest_framework.filters.SearchFilter',
-        'rest_framework.filters.OrderingFilter',
-    ],
-    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
-    'PAGE_SIZE': 20,
-}
-
-# JWT Settings
-SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=30),
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
-    'ROTATE_REFRESH_TOKENS': True,
-    'ALGORITHM': 'HS256',
-    'SIGNING_KEY': SECRET_KEY,
-}
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
@@ -107,17 +98,26 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'config.wsgi.application'
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': config('DB_NAME', default='jamii_aide'),
-        'USER': config('DB_USER', default='postgres'),
-        'PASSWORD': config('DB_PASSWORD', default=''),
-        'HOST': config('DB_HOST', default='localhost'),
-        'PORT': config('DB_PORT', default='5432'),
+DATABASE_URL = config('DATABASE_URL', default='')
+if DATABASE_URL:
+    DATABASES = {
+        'default': parse_database_url(DATABASE_URL),
     }
-}
-SECRET_KEY = config('SECRET_KEY')
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': config('DB_ENGINE', default='django.db.backends.postgresql'),
+            'NAME': config('DB_NAME', default='jamii_aide'),
+            'USER': config('DB_USER', default='postgres'),
+            'PASSWORD': config('DB_PASSWORD', default=''),
+            'HOST': config('DB_HOST', default='localhost'),
+            'PORT': config('DB_PORT', default='5432'),
+            'CONN_MAX_AGE': config('DB_CONN_MAX_AGE', default=60, cast=int),
+            'OPTIONS': {
+                'sslmode': config('DB_SSLMODE', default='prefer'),
+            },
+        }
+    }
 
 AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},
@@ -157,20 +157,39 @@ REST_FRAMEWORK = {
 }
 
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=30),
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
-    'ROTATE_REFRESH_TOKENS': True,
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=config('ACCESS_TOKEN_EXPIRE_MINUTES', default=30, cast=int)),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=config('REFRESH_TOKEN_EXPIRE_DAYS', default=7, cast=int)),
+    'ROTATE_REFRESH_TOKENS': env_bool('ROTATE_REFRESH_TOKENS', True),
+    'BLACKLIST_AFTER_ROTATION': env_bool('BLACKLIST_AFTER_ROTATION', False),
     'ALGORITHM': 'HS256',
     'SIGNING_KEY': SECRET_KEY,
 }
 
 CORS_ALLOWED_ORIGINS = config(
     'CORS_ORIGINS',
-default='http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000',
-    cast=lambda v: [s.strip() for s in v.split(',')]
+    default='http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000',
+    cast=csv_to_list,
+)
+CORS_ALLOW_CREDENTIALS = True
+
+CSRF_TRUSTED_ORIGINS = config(
+    'CSRF_TRUSTED_ORIGINS',
+    default=','.join(CORS_ALLOWED_ORIGINS),
+    cast=csv_to_list,
 )
 
-CORS_ALLOW_CREDENTIALS = True
+SOCIALACCOUNT_PROVIDERS = {
+    'google': {
+        'SCOPE': ['profile', 'email'],
+        'AUTH_PARAMS': {'access_type': 'online'},
+        'FIELDS': ['email', 'first_name', 'last_name', 'picture'],
+        'APP': {
+            'client_id': config('GOOGLE_OAUTH_CLIENT_ID', default=''),
+            'secret': config('GOOGLE_OAUTH_CLIENT_SECRET', default=''),
+            'key': '',
+        },
+    }
+}
 
 LOGGING = {
     'version': 1,

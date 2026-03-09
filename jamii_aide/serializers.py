@@ -105,17 +105,32 @@ class EndUserUpdateSerializer(EndUserProfileUpdateSerializer):
 # ============ FAMILY MEMBER SERIALIZERS ============
 
 class FamilyMemberSerializer(serializers.ModelSerializer):
+    # Frontend/backward-compat aliases
+    phone_number = serializers.CharField(write_only=True, required=False, allow_blank=True, allow_null=True)
+    location = serializers.CharField(write_only=True, required=False, allow_blank=True, allow_null=True)
+
     class Meta:
         model = FamilyMember
         fields = [
             'id', 'end_user_profile', 'first_name', 'last_name',
             'date_of_birth', 'gender', 'id_number', 'profile_image',
-            'phone', 'email', 'blood_type', 'known_allergies',
+            'phone', 'phone_number', 'city', 'location', 'address',
+            'email', 'blood_type', 'known_allergies',
             'chronic_conditions', 'current_medications',
             'emergency_contact', 'emergency_phone', 'is_active',
             'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'end_user_profile', 'created_at', 'updated_at']
+
+    def validate(self, attrs):
+        phone_number = attrs.pop('phone_number', None)
+        location = attrs.pop('location', None)
+
+        if phone_number is not None and attrs.get('phone') in (None, ''):
+            attrs['phone'] = phone_number
+        if location is not None and attrs.get('city') in (None, ''):
+            attrs['city'] = location
+        return attrs
 
 class FamilyMemberDetailSerializer(FamilyMemberSerializer):
     """Detailed family member with related data"""
