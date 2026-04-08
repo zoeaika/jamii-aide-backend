@@ -1,11 +1,9 @@
 from rest_framework import serializers
-from django.contrib.auth.hashers import make_password
-from django.contrib.auth import authenticate
 from uuid import uuid4
 from jamii_aide.models import (
     CustomUser, EndUserProfile, HealthcareNurse, FamilyMember,
-    AvailabilitySlot, Appointment, HealthRecord, Prescription,
-    Payment, Review, NurseEarning, AppointmentStatus, Notification
+    AvailabilitySlot, Appointment, HealthRecord,
+    Payment, Review, AppointmentStatus, Notification, UserRole
 )
 
 # ============ AUTH SERIALIZERS ============
@@ -40,9 +38,20 @@ class RegisterSerializer(serializers.Serializer):
     password = serializers.CharField(min_length=8, write_only=True)
     first_name = serializers.CharField()
     last_name = serializers.CharField()
-    role = serializers.ChoiceField(
-        choices=['END_USER', 'HEALTHCARE_NURSE', 'ADMIN']
-    )
+
+    def validate_email(self, value):
+        email = value.strip().lower()
+        if CustomUser.objects.filter(email__iexact=email).exists():
+            raise serializers.ValidationError('An account with this email already exists.')
+        return email
+
+    def validate_phone(self, value):
+        phone = value.strip()
+        if not phone:
+            return ''
+        if CustomUser.objects.filter(phone=phone).exists():
+            raise serializers.ValidationError('An account with this phone number already exists.')
+        return phone
 
     def create(self, validated_data):
         password = validated_data.pop('password')
@@ -54,6 +63,7 @@ class RegisterSerializer(serializers.Serializer):
         while CustomUser.objects.filter(username=username).exists():
             username = f"{base_username}_{uuid4().hex[:6]}"
         validated_data['username'] = username
+        validated_data['role'] = UserRole.USER
         user = CustomUser.objects.create(**validated_data)
         user.set_password(password)
         user.save()
@@ -69,8 +79,10 @@ class LoginSerializer(serializers.Serializer):
         password = attrs.get('password')
         
         if email and password:
-            user = CustomUser.objects.filter(email=email).first()
+            user = CustomUser.objects.filter(email__iexact=email.strip().lower()).first()
             if user and user.check_password(password):
+                if not user.is_active:
+                    raise serializers.ValidationError('This account is inactive.')
                 attrs['user'] = user
                 return attrs
         
@@ -108,11 +120,13 @@ class FamilyMemberSerializer(serializers.ModelSerializer):
     # Frontend/backward-compat aliases
     phone_number = serializers.CharField(write_only=True, required=False, allow_blank=True, allow_null=True)
     location = serializers.CharField(write_only=True, required=False, allow_blank=True, allow_null=True)
+    full_name = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = FamilyMember
         fields = [
             'id', 'end_user_profile', 'first_name', 'last_name',
+            'full_name',
             'date_of_birth', 'gender', 'id_number', 'profile_image',
             'phone', 'phone_number', 'city', 'location', 'address',
             'email', 'blood_type', 'known_allergies',
@@ -121,6 +135,9 @@ class FamilyMemberSerializer(serializers.ModelSerializer):
             'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'end_user_profile', 'created_at', 'updated_at']
+
+    def get_full_name(self, obj):
+        return str(obj)
 
     def validate(self, attrs):
         phone_number = attrs.pop('phone_number', None)
@@ -148,7 +165,7 @@ class AvailabilitySlotSerializer(serializers.ModelSerializer):
             'start_time', 'end_time', 'is_available',
             'created_at', 'updated_at'
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'nurse', 'created_at', 'updated_at']
 
 class HealthcareNurseSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
@@ -230,6 +247,27 @@ class AppointmentCreateSerializer(serializers.ModelSerializer):
             'admission_questionnaire'
         ]
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        request = self.context.get('request')
+        if not request or not getattr(request, 'user', None) or not request.user.is_authenticated:
+            return
+
+        family_member_field = self.fields.get('family_member')
+        if family_member_field is None:
+            return
+
+        if request.user.role == UserRole.USER:
+            end_user_profile, _ = EndUserProfile.objects.get_or_create(user=request.user)
+            family_member_field.queryset = FamilyMember.objects.filter(
+                end_user_profile=end_user_profile,
+                is_active=True,
+            )
+        elif request.user.role == UserRole.ADMIN or request.user.is_staff:
+            family_member_field.queryset = FamilyMember.objects.filter(is_active=True)
+        else:
+            family_member_field.queryset = FamilyMember.objects.none()
+
     def validate(self, attrs):
         questionnaire = attrs.get('admission_questionnaire') or {}
         needs_admission_details = (
@@ -309,10 +347,13 @@ class HealthRecordCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = HealthRecord
         fields = [
+            'id',
             'family_member', 'type', 'title', 'content',
             'appointment', 'blood_pressure', 'heart_rate',
-            'temperature', 'weight'
+            'temperature', 'weight',
+            'is_private', 'is_confidential',
         ]
+        read_only_fields = ['id']
 
 class HealthRecordUpdateSerializer(serializers.ModelSerializer):
     class Meta:
@@ -320,35 +361,6 @@ class HealthRecordUpdateSerializer(serializers.ModelSerializer):
         fields = [
             'title', 'content', 'blood_pressure', 'heart_rate',
             'temperature', 'weight'
-        ]
-
-# ============ PRESCRIPTION SERIALIZERS ============
-
-class PrescriptionSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Prescription
-        fields = [
-            'id', 'end_user_profile', 'medication_name', 'dosage',
-            'frequency', 'duration', 'start_date', 'end_date',
-            'prescribed_by', 'notes', 'file', 'is_active',
-            'refills_remaining', 'created_at', 'updated_at'
-        ]
-        read_only_fields = ['id', 'created_at', 'updated_at']
-
-class PrescriptionCreateSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Prescription
-        fields = [
-            'medication_name', 'dosage', 'frequency', 'duration',
-            'start_date', 'end_date', 'prescribed_by', 'notes'
-        ]
-
-class PrescriptionUpdateSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Prescription
-        fields = [
-            'medication_name', 'dosage', 'frequency', 'duration',
-            'end_date', 'notes', 'is_active'
         ]
 
 # ============ PAYMENT SERIALIZERS ============
@@ -381,8 +393,14 @@ class PaymentInitiateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Payment
         fields = [
-            'amount', 'method', 'description', 'appointment_ids'
+            'id', 'amount', 'method', 'description', 'appointment_ids',
+            'status', 'mpesa_transaction_id',
         ]
+        read_only_fields = ['id']
+
+    def create(self, validated_data):
+        validated_data.pop('appointment_ids', None)
+        return super().create(validated_data)
 
 # ============ REVIEW SERIALIZERS ============
 
@@ -408,19 +426,6 @@ class ReviewDetailSerializer(ReviewSerializer):
     """Detailed review with nurse info"""
     nurse = HealthcareNurseSerializer(read_only=True)
     end_user_profile = EndUserProfileSerializer(read_only=True)
-
-# ============ NURSE EARNING SERIALIZERS ============
-
-class NurseEarningSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = NurseEarning
-        fields = [
-            'id', 'nurse', 'appointment_count', 'amount', 'currency',
-            'payment_period_start', 'payment_period_end',
-            'payment_status', 'paid_at', 'created_at', 'updated_at'
-        ]
-        read_only_fields = ['id', 'created_at', 'updated_at']
-
 
 class NotificationSerializer(serializers.ModelSerializer):
     event_type_display = serializers.CharField(source='get_event_type_display', read_only=True)

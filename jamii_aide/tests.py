@@ -1,5 +1,7 @@
 from datetime import date, time, timedelta
+from unittest.mock import patch
 
+from django.test import TestCase
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
@@ -11,9 +13,13 @@ from jamii_aide.models import (
     EndUserProfile,
     FamilyMember,
     HealthcareNurse,
+    HealthRecord,
     Notification,
     NotificationEventType,
+    Payment,
+    PaymentMethod,
     ProfessionalType,
+    Review,
     ShiftType,
     UserRole,
 )
@@ -33,7 +39,7 @@ class AppointmentNotificationFlowTests(APITestCase):
             username="diaspora1",
             email="diaspora1@example.com",
             password="StrongPass123!",
-            role=UserRole.END_USER,
+            role=UserRole.USER,
         )
         self.end_user_profile = EndUserProfile.objects.create(
             user=self.end_user_user,
@@ -45,7 +51,7 @@ class AppointmentNotificationFlowTests(APITestCase):
             username="nurse1",
             email="nurse1@example.com",
             password="StrongPass123!",
-            role=UserRole.HEALTHCARE_NURSE,
+            role=UserRole.NURSE,
         )
         self.nurse = HealthcareNurse.objects.create(
             user=self.nurse_user,
@@ -158,7 +164,7 @@ class AppointmentNotificationFlowTests(APITestCase):
             username="diaspora2",
             email="diaspora2@example.com",
             password="StrongPass123!",
-            role=UserRole.END_USER,
+            role=UserRole.USER,
         )
 
         own_notification = Notification.objects.create(
@@ -268,7 +274,7 @@ class AppointmentNotificationFlowTests(APITestCase):
             username="end_user_1",
             email="end_user_1@example.com",
             password="StrongPass123!",
-            role=UserRole.END_USER,
+            role=UserRole.USER,
         )
         end_user_profile = EndUserProfile.objects.create(
             user=end_user,
@@ -307,6 +313,240 @@ class AppointmentNotificationFlowTests(APITestCase):
             service_type="Home Visit",
         )
         self.assertEqual(created.status, AppointmentStatus.SUBMITTED)
+        admin_notification = Notification.objects.get(
+            recipient=self.admin_user,
+            appointment=created,
+            event_type=NotificationEventType.REQUEST_SUBMITTED,
+        )
+        self.assertIn("awaiting admin review", admin_notification.message.lower())
+
+    def test_end_user_cannot_submit_care_request_for_other_users_family_member(self):
+        requester = CustomUser.objects.create_user(
+            username="requester_user",
+            email="requester_user@example.com",
+            password="StrongPass123!",
+            role=UserRole.USER,
+        )
+        requester_profile = EndUserProfile.objects.create(
+            user=requester,
+            current_country="UK",
+            current_city="London",
+        )
+        owner = CustomUser.objects.create_user(
+            username="owner_user",
+            email="owner_user@example.com",
+            password="StrongPass123!",
+            role=UserRole.USER,
+        )
+        owner_profile = EndUserProfile.objects.create(
+            user=owner,
+            current_country="Kenya",
+            current_city="Nairobi",
+        )
+        other_family_member = FamilyMember.objects.create(
+            end_user_profile=owner_profile,
+            first_name="Else",
+            last_name="Owned",
+            date_of_birth=date(1964, 7, 7),
+            gender="FEMALE",
+        )
+
+        self.client.force_authenticate(user=requester)
+        response = self.client.post(
+            reverse("appointment-list"),
+            {
+                "family_member": str(other_family_member.id),
+                "appointment_date": str(date.today() + timedelta(days=3)),
+                "start_time": "09:00:00",
+                "end_time": "11:00:00",
+                "reason": "Home care support",
+                "service_type": "Home Visit",
+                "shift_type": ShiftType.DAILY_PER_HOUR_12H,
+                "visit_address": "Karen",
+                "visit_city": "Nairobi",
+                "notes": "Needs mobility support",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("family_member", response.data)
+        self.assertFalse(
+            Appointment.objects.filter(
+                end_user_profile=requester_profile,
+                family_member=other_family_member,
+            ).exists()
+        )
+
+
+class AuthenticationFlowTests(APITestCase):
+    def test_user_can_register_with_email_password_and_get_jwt_tokens(self):
+        response = self.client.post(
+            reverse("register"),
+            {
+                "email": "newuser@example.com",
+                "password": "StrongPass123!",
+                "first_name": "New",
+                "last_name": "User",
+                "current_country": "Kenya",
+                "current_city": "Nairobi",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertIn("access_token", response.data)
+        self.assertIn("refresh_token", response.data)
+        self.assertEqual(response.data["token_type"], "bearer")
+
+        user = CustomUser.objects.get(email="newuser@example.com")
+        self.assertTrue(user.check_password("StrongPass123!"))
+        self.assertTrue(
+            EndUserProfile.objects.filter(
+                user=user,
+                current_country="Kenya",
+                current_city="Nairobi",
+            ).exists()
+        )
+
+    def test_user_can_login_with_email_password(self):
+        user = CustomUser.objects.create_user(
+            username="login_user",
+            email="login@example.com",
+            password="StrongPass123!",
+            role=UserRole.USER,
+        )
+
+        response = self.client.post(
+            reverse("login"),
+            {
+                "email": "login@example.com",
+                "password": "StrongPass123!",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("access_token", response.data)
+        self.assertIn("refresh_token", response.data)
+        self.assertEqual(response.data["user"]["id"], str(user.id))
+
+    def test_register_rejects_duplicate_email(self):
+        CustomUser.objects.create_user(
+            username="existing_user",
+            email="existing@example.com",
+            password="StrongPass123!",
+            role=UserRole.USER,
+        )
+
+        response = self.client.post(
+            reverse("register"),
+            {
+                "email": "existing@example.com",
+                "password": "StrongPass123!",
+                "first_name": "Existing",
+                "last_name": "User",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("email", response.data)
+
+    def test_register_ignores_elevated_role_input_and_creates_standard_user(self):
+        response = self.client.post(
+            reverse("register"),
+            {
+                "email": "forced-admin@example.com",
+                "password": "StrongPass123!",
+                "first_name": "Forced",
+                "last_name": "Admin",
+                "role": UserRole.ADMIN,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        created_user = CustomUser.objects.get(email="forced-admin@example.com")
+        self.assertEqual(created_user.role, UserRole.USER)
+        self.assertFalse(created_user.is_staff)
+
+    @patch("jamii_aide.google_serializers.id_token.verify_oauth2_token")
+    def test_google_login_creates_verified_end_user_and_profile(self, mock_verify):
+        mock_verify.return_value = {
+            "iss": "https://accounts.google.com",
+            "sub": "google-user-123",
+            "email": "googleuser@example.com",
+            "email_verified": True,
+            "given_name": "Google",
+            "family_name": "User",
+        }
+
+        response = self.client.post(
+            reverse("google-login"),
+            {"credential": "valid-google-id-token"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["token_type"], "bearer")
+        self.assertEqual(response.data["user"]["email"], "googleuser@example.com")
+
+        user = CustomUser.objects.get(email="googleuser@example.com")
+        self.assertEqual(user.role, UserRole.USER)
+        self.assertTrue(user.is_verified)
+        self.assertTrue(EndUserProfile.objects.filter(user=user).exists())
+
+    @patch("jamii_aide.google_serializers.id_token.verify_oauth2_token")
+    def test_google_login_updates_existing_user(self, mock_verify):
+        existing_user = CustomUser.objects.create_user(
+            username="google_existing",
+            email="googleexisting@example.com",
+            password="StrongPass123!",
+            first_name="Old",
+            last_name="Name",
+            role=UserRole.USER,
+            is_verified=False,
+        )
+
+        mock_verify.return_value = {
+            "iss": "https://accounts.google.com",
+            "sub": "google-user-789",
+            "email": "googleexisting@example.com",
+            "email_verified": True,
+            "given_name": "Updated",
+            "family_name": "Person",
+        }
+
+        response = self.client.post(
+            reverse("google-login"),
+            {"credential": "existing-user-google-id-token"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        existing_user.refresh_from_db()
+        self.assertEqual(existing_user.first_name, "Updated")
+        self.assertEqual(existing_user.last_name, "Person")
+        self.assertTrue(existing_user.is_verified)
+
+    @patch("jamii_aide.google_serializers.id_token.verify_oauth2_token")
+    def test_google_login_rejects_unverified_email(self, mock_verify):
+        mock_verify.return_value = {
+            "iss": "https://accounts.google.com",
+            "sub": "google-user-456",
+            "email": "pending@example.com",
+            "email_verified": False,
+        }
+
+        response = self.client.post(
+            reverse("google-login"),
+            {"credential": "unverified-google-id-token"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("credential", response.data)
 
 
 class HealthcareNurseProfessionalTypeTests(APITestCase):
@@ -323,7 +563,7 @@ class HealthcareNurseProfessionalTypeTests(APITestCase):
             username="physio_user",
             email="physio@example.com",
             password="StrongPass123!",
-            role=UserRole.HEALTHCARE_NURSE,
+            role=UserRole.NURSE,
         )
         self.physio = HealthcareNurse.objects.create(
             user=physio_user,
@@ -339,7 +579,7 @@ class HealthcareNurseProfessionalTypeTests(APITestCase):
             username="caregiver_user",
             email="caregiver@example.com",
             password="StrongPass123!",
-            role=UserRole.HEALTHCARE_NURSE,
+            role=UserRole.NURSE,
         )
         self.caregiver = HealthcareNurse.objects.create(
             user=caregiver_user,
@@ -375,13 +615,49 @@ class HealthcareNurseProfessionalTypeTests(APITestCase):
         self.assertEqual(response.data["professional_type_display"], "Physiotherapist")
 
 
+class WebAuthenticationFlowTests(TestCase):
+    def test_signup_creates_standard_user_profile_and_redirects_to_user_dashboard(self):
+        response = self.client.post(
+            reverse("signup-page"),
+            {
+                "username": "web_signup_user",
+                "email": "websignup@example.com",
+                "password1": "StrongPass123!",
+                "password2": "StrongPass123!",
+            },
+        )
+
+        self.assertRedirects(response, reverse("dashboard-user"))
+        created_user = CustomUser.objects.get(username="web_signup_user")
+        self.assertEqual(created_user.role, UserRole.USER)
+        self.assertTrue(EndUserProfile.objects.filter(user=created_user).exists())
+
+    def test_login_redirects_nurse_to_nurse_dashboard(self):
+        nurse_user = CustomUser.objects.create_user(
+            username="web_nurse",
+            email="webnurse@example.com",
+            password="StrongPass123!",
+            role=UserRole.NURSE,
+        )
+
+        response = self.client.post(
+            reverse("login-page"),
+            {
+                "username": nurse_user.username,
+                "password": "StrongPass123!",
+            },
+        )
+
+        self.assertRedirects(response, reverse("dashboard-nurse"))
+
+
 class FamilyMemberFlowTests(APITestCase):
     def setUp(self):
         self.end_user = CustomUser.objects.create_user(
             username="family_member_user",
             email="family_member_user@example.com",
             password="StrongPass123!",
-            role=UserRole.END_USER,
+            role=UserRole.USER,
         )
         self.end_user_profile = EndUserProfile.objects.create(
             user=self.end_user,
@@ -423,13 +699,42 @@ class FamilyMemberFlowTests(APITestCase):
         payload = response.data.get("results", response.data)
         returned_ids = {item["id"] for item in payload}
         self.assertIn(str(member.id), returned_ids)
+        self.assertEqual(payload[0]["full_name"], "Saved Person")
+
+    def test_family_member_list_excludes_other_users_members(self):
+        other_user = CustomUser.objects.create_user(
+            username="other_family_member_user",
+            email="other_family_member_user@example.com",
+            password="StrongPass123!",
+            role=UserRole.USER,
+        )
+        other_profile = EndUserProfile.objects.create(
+            user=other_user,
+            current_country="Kenya",
+            current_city="Nairobi",
+        )
+        FamilyMember.objects.create(
+            end_user_profile=other_profile,
+            first_name="Hidden",
+            last_name="Person",
+            date_of_birth=date(1955, 5, 5),
+            gender="FEMALE",
+        )
+
+        self.client.force_authenticate(user=self.end_user)
+        response = self.client.get(reverse("family-member-list"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        payload = response.data.get("results", response.data)
+        returned_names = {item["full_name"] for item in payload}
+        self.assertNotIn("Hidden Person", returned_names)
 
     def test_family_member_list_auto_creates_missing_profile_for_end_user(self):
         user_without_profile = CustomUser.objects.create_user(
             username="missing_profile_user",
             email="missing_profile_user@example.com",
             password="StrongPass123!",
-            role=UserRole.END_USER,
+            role=UserRole.USER,
         )
         self.assertFalse(EndUserProfile.objects.filter(user=user_without_profile).exists())
 
@@ -440,3 +745,226 @@ class FamilyMemberFlowTests(APITestCase):
         self.assertTrue(EndUserProfile.objects.filter(user=user_without_profile).exists())
         payload = response.data.get("results", response.data)
         self.assertEqual(payload, [])
+
+
+class AdminEndUserAccessTests(APITestCase):
+    def setUp(self):
+        self.admin_user = CustomUser.objects.create_user(
+            username="admin_users_view",
+            email="admin_users_view@example.com",
+            password="StrongPass123!",
+            role=UserRole.ADMIN,
+            is_staff=True,
+        )
+        self.end_user = CustomUser.objects.create_user(
+            username="listed_end_user",
+            email="listed_end_user@example.com",
+            password="StrongPass123!",
+            role=UserRole.USER,
+        )
+        self.end_user_profile = EndUserProfile.objects.create(
+            user=self.end_user,
+            current_country="Kenya",
+            current_city="Nairobi",
+        )
+
+    def test_admin_can_list_end_users_for_dashboard_counts(self):
+        self.client.force_authenticate(user=self.admin_user)
+
+        response = self.client.get(reverse("end-user-list"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        payload = response.data.get("results", response.data)
+        returned_ids = {item["id"] for item in payload}
+        self.assertIn(str(self.end_user_profile.id), returned_ids)
+
+
+class NurseAvailabilitySlotFlowTests(APITestCase):
+    def setUp(self):
+        self.nurse_user = CustomUser.objects.create_user(
+            username="slot_nurse",
+            email="slot_nurse@example.com",
+            password="StrongPass123!",
+            role=UserRole.NURSE,
+        )
+        self.nurse = HealthcareNurse.objects.create(
+            user=self.nurse_user,
+            license_number="SLOT-NURSE-001",
+            license_expiry=date.today() + timedelta(days=365),
+            years_experience=3,
+            status="APPROVED",
+            is_active=True,
+        )
+
+        self.end_user = CustomUser.objects.create_user(
+            username="slot_end_user",
+            email="slot_end_user@example.com",
+            password="StrongPass123!",
+            role=UserRole.USER,
+        )
+        EndUserProfile.objects.create(user=self.end_user, current_country="USA", current_city="Boston")
+
+    def test_nurse_can_create_and_list_own_availability_slots(self):
+        self.client.force_authenticate(user=self.nurse_user)
+
+        create_response = self.client.post(
+            reverse("availability-slot-list"),
+            {
+                "day_of_week": 1,
+                "start_time": "09:00:00",
+                "end_time": "12:00:00",
+                "is_available": True,
+            },
+            format="json",
+        )
+        self.assertEqual(create_response.status_code, status.HTTP_201_CREATED)
+
+        list_response = self.client.get(reverse("availability-slot-list"))
+        self.assertEqual(list_response.status_code, status.HTTP_200_OK)
+        payload = list_response.data.get("results", list_response.data)
+        self.assertEqual(len(payload), 1)
+        self.assertEqual(str(payload[0]["nurse"]), str(self.nurse.id))
+
+    def test_end_user_cannot_access_availability_slots(self):
+        self.client.force_authenticate(user=self.end_user)
+        response = self.client.get(reverse("availability-slot-list"))
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+
+class HealthRecordPrescriptionPaymentReviewFlowTests(APITestCase):
+    def setUp(self):
+        self.end_user = CustomUser.objects.create_user(
+            username="records_user",
+            email="records_user@example.com",
+            password="StrongPass123!",
+            role=UserRole.USER,
+        )
+        self.end_user_profile = EndUserProfile.objects.create(
+            user=self.end_user,
+            current_country="USA",
+            current_city="Miami",
+        )
+        self.family_member = FamilyMember.objects.create(
+            end_user_profile=self.end_user_profile,
+            first_name="Jane",
+            last_name="Doe",
+            date_of_birth=date(1960, 1, 1),
+            gender="FEMALE",
+        )
+
+        self.nurse_user = CustomUser.objects.create_user(
+            username="records_nurse",
+            email="records_nurse@example.com",
+            password="StrongPass123!",
+            role=UserRole.NURSE,
+        )
+        self.nurse = HealthcareNurse.objects.create(
+            user=self.nurse_user,
+            license_number="REC-NURSE-001",
+            license_expiry=date.today() + timedelta(days=365),
+            years_experience=6,
+            status="APPROVED",
+            is_active=True,
+        )
+
+        self.appointment = Appointment.objects.create(
+            family_member=self.family_member,
+            end_user_profile=self.end_user_profile,
+            appointment_date=date.today() + timedelta(days=3),
+            start_time=time(9, 0),
+            end_time=time(11, 0),
+            reason="Follow-up",
+            service_type="Home Visit",
+            shift_type=ShiftType.DAILY_PER_HOUR_12H,
+            visit_address="CBD",
+            visit_city="Nairobi",
+            status=AppointmentStatus.COMPLETED,
+            nurse=self.nurse,
+        )
+
+    def test_end_user_can_create_health_record_and_it_is_scoped(self):
+        self.client.force_authenticate(user=self.end_user)
+
+        create_response = self.client.post(
+            reverse("health-record-list"),
+            {
+                "family_member": str(self.family_member.id),
+                "type": "GENERAL_NOTE",
+                "title": "Vitals",
+                "content": "BP stable",
+                "is_private": True,
+            },
+            format="json",
+        )
+        self.assertEqual(create_response.status_code, status.HTTP_201_CREATED)
+        record_id = create_response.data["id"]
+
+        list_response = self.client.get(reverse("health-record-list"))
+        self.assertEqual(list_response.status_code, status.HTTP_200_OK)
+        payload = list_response.data.get("results", list_response.data)
+        returned_ids = {item["id"] for item in payload}
+        self.assertIn(record_id, returned_ids)
+
+        other_user = CustomUser.objects.create_user(
+            username="other_records_user",
+            email="other_records_user@example.com",
+            password="StrongPass123!",
+            role=UserRole.USER,
+        )
+        EndUserProfile.objects.create(user=other_user, current_country="USA", current_city="LA")
+
+        self.client.force_authenticate(user=other_user)
+        other_list = self.client.get(reverse("health-record-list"))
+        self.assertEqual(other_list.status_code, status.HTTP_200_OK)
+        other_payload = other_list.data.get("results", other_list.data)
+        self.assertEqual(other_payload, [])
+
+    def test_end_user_can_initiate_payment_and_stats_aggregate_completed(self):
+        self.client.force_authenticate(user=self.end_user)
+
+        payment_response = self.client.post(
+            reverse("payment-list"),
+            {
+                "amount": "2500.00",
+                "method": PaymentMethod.MPESA,
+                "description": "Appointment payment",
+                "appointment_ids": [str(self.appointment.id)],
+            },
+            format="json",
+        )
+        self.assertEqual(payment_response.status_code, status.HTTP_201_CREATED)
+        mpesa_id = payment_response.data["mpesa_transaction_id"]
+
+        stats_before = self.client.get(reverse("payment-stats"))
+        self.assertEqual(stats_before.status_code, status.HTTP_200_OK)
+        self.assertEqual(stats_before.data["total_spent"], 0)
+
+        self.client.logout()
+        callback_response = self.client.post(
+            reverse("payment-mpesa-callback"),
+            {"mpesa_transaction_id": mpesa_id, "mpesa_receipt_number": "RCP-001"},
+            format="json",
+        )
+        self.assertEqual(callback_response.status_code, status.HTTP_200_OK)
+
+        self.client.force_authenticate(user=self.end_user)
+        stats_after = self.client.get(reverse("payment-stats"))
+        self.assertEqual(stats_after.status_code, status.HTTP_200_OK)
+        self.assertEqual(stats_after.data["total_spent"], 2500.0)
+        self.assertEqual(stats_after.data["payment_count"], 1)
+
+    def test_end_user_can_review_completed_appointment_and_review_is_created(self):
+        self.client.force_authenticate(user=self.end_user)
+
+        create_response = self.client.post(
+            reverse("review-list"),
+            {
+                "appointment": str(self.appointment.id),
+                "rating": 5,
+                "comment": "Great care",
+            },
+            format="json",
+        )
+        self.assertEqual(create_response.status_code, status.HTTP_201_CREATED)
+        review = Review.objects.get(appointment=self.appointment)
+        self.assertEqual(review.nurse, self.nurse)

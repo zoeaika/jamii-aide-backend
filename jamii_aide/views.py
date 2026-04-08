@@ -1,3 +1,9 @@
+from django.contrib import messages
+from django.contrib.auth import login as auth_login
+from django.contrib.auth.decorators import login_required
+from django.shortcuts import redirect, render
+from django.utils.decorators import method_decorator
+from django.views import View
 from rest_framework import viewsets, status, permissions, filters
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.exceptions import ValidationError
@@ -9,14 +15,14 @@ from django_filters.rest_framework import DjangoFilterBackend
 from django.utils import timezone
 from django.db.models import Q, Avg
 from decimal import Decimal
-from allauth.socialaccount.models import SocialAccount
 import uuid
-import requests
+import logging
 
 from jamii_aide.models import (
     CustomUser, EndUserProfile, HealthcareNurse, FamilyMember,
-    AvailabilitySlot, Appointment, HealthRecord, Prescription,
-    Payment, Review, NurseEarning, AppointmentStatus, PaymentStatus, UserRole,
+    AvailabilitySlot, Appointment, HealthRecord,
+    Payment, Review, AppointmentStatus, PaymentStatus, UserRole,
+    NurseStatus,
     Notification, NotificationEventType
 )
 from jamii_aide.serializers import (
@@ -32,13 +38,15 @@ from jamii_aide.serializers import (
     AppointmentSuggestNurseSerializer, AppointmentDecisionSerializer,
     HealthRecordSerializer, HealthRecordCreateSerializer,
     HealthRecordUpdateSerializer,
-    PrescriptionSerializer, PrescriptionCreateSerializer,
-    PrescriptionUpdateSerializer,
     PaymentSerializer, PaymentInitiateSerializer,
     ReviewSerializer, ReviewCreateSerializer, ReviewDetailSerializer,
-    NurseEarningSerializer, NotificationSerializer
+    NotificationSerializer
 )
 from jamii_aide.google_serializers import GoogleAuthSerializer, GoogleLoginResponseSerializer
+from jamii_aide.forms import SignupForm, LoginForm
+
+
+logger = logging.getLogger('jamii_aide.appointments')
 
 
 def create_notification(*, recipient, appointment, event_type, title, message):
@@ -52,7 +60,11 @@ def create_notification(*, recipient, appointment, event_type, title, message):
 
 
 def is_end_user(user):
-    return user.role == UserRole.END_USER
+    return user.role == UserRole.USER
+
+
+def is_admin_user(user):
+    return user.role == UserRole.ADMIN or user.is_staff
 
 
 def get_end_user_profile(user):
@@ -67,6 +79,114 @@ def get_end_user_profile(user):
     )
     return profile
 
+
+def get_nurse_profile(user):
+    if user.role != UserRole.NURSE:
+        raise PermissionDenied('Only healthcare nurses can access this resource.')
+    nurse, _ = HealthcareNurse.objects.get_or_create(
+        user=user,
+        defaults={
+            'license_number': '',
+            'license_expiry': timezone.now().date(),
+            'years_experience': 0,
+            'status': NurseStatus.PENDING,
+        },
+    )
+    return nurse
+
+
+def get_dashboard_url_for_role(user):
+    if user.role == UserRole.NURSE:
+        return '/dashboard/nurse'
+    if user.role == UserRole.ADMIN:
+        return '/dashboard/admin'
+    return '/dashboard/user'
+
+
+class SignupView(View):
+    template_name = 'jamii_aide/signup.html'
+
+    def get(self, request):
+        if request.user.is_authenticated:
+            return redirect(get_dashboard_url_for_role(request.user))
+        return render(request, self.template_name, {'form': SignupForm()})
+
+    def post(self, request):
+        form = SignupForm(request.POST)
+        if form.is_valid():
+            user = form.save()
+            EndUserProfile.objects.get_or_create(
+                user=user,
+                defaults={
+                    'current_country': '',
+                    'current_city': '',
+                },
+            )
+            auth_login(request, user)
+            messages.success(request, 'Your account has been created successfully.')
+            return redirect(get_dashboard_url_for_role(user))
+        messages.error(request, 'Please correct the errors below.')
+        return render(request, self.template_name, {'form': form}, status=400)
+
+
+class LoginPageView(View):
+    template_name = 'jamii_aide/login.html'
+
+    def get(self, request):
+        if request.user.is_authenticated:
+            return redirect(get_dashboard_url_for_role(request.user))
+        return render(request, self.template_name, {'form': LoginForm(request=request)})
+
+    def post(self, request):
+        form = LoginForm(request=request, data=request.POST)
+        if form.is_valid():
+            user = form.get_user()
+            auth_login(request, user)
+            messages.success(request, 'Welcome back.')
+            return redirect(get_dashboard_url_for_role(user))
+        messages.error(request, 'Login failed. Please try again.')
+        return render(request, self.template_name, {'form': form}, status=400)
+
+
+@method_decorator(login_required, name='dispatch')
+class RoleRedirectView(View):
+    def get(self, request):
+        return redirect(get_dashboard_url_for_role(request.user))
+
+
+@method_decorator(login_required, name='dispatch')
+class DashboardView(View):
+    template_name = 'jamii_aide/dashboard.html'
+    expected_role = None
+    heading = ''
+
+    def get(self, request):
+        if request.user.role != self.expected_role:
+            messages.error(request, 'You do not have permission to view that dashboard.')
+            return redirect(get_dashboard_url_for_role(request.user))
+        return render(
+            request,
+            self.template_name,
+            {
+                'heading': self.heading,
+            },
+        )
+
+
+class UserDashboardView(DashboardView):
+    expected_role = UserRole.USER
+    heading = 'User Dashboard'
+
+
+class NurseDashboardView(DashboardView):
+    expected_role = UserRole.NURSE
+    heading = 'Nurse Dashboard'
+
+
+class AdminDashboardView(DashboardView):
+    expected_role = UserRole.ADMIN
+    heading = 'Admin Dashboard'
+
 # ============ AUTHENTICATION VIEWS ============
 
 class RegisterView(APIView):
@@ -80,13 +200,13 @@ class RegisterView(APIView):
             user = serializer.save()
             
             # Create role-specific profile
-            if user.role == UserRole.END_USER:
+            if user.role == UserRole.USER:
                 EndUserProfile.objects.create(
                     user=user,
                     current_country=request.data.get('current_country', ''),
                     current_city=request.data.get('current_city', '')
                 )
-            elif user.role == 'HEALTHCARE_NURSE':
+            elif user.role == UserRole.NURSE:
                 HealthcareNurse.objects.create(
                     user=user,
                     license_number='',
@@ -153,24 +273,20 @@ class GoogleLoginView(APIView):
         
         if serializer.is_valid():
             user = serializer.save()
-            
-            # Generate JWT tokens
+            user.last_login = timezone.now()
+            user.save(update_fields=['last_login'])
+
             refresh = RefreshToken.for_user(user)
-            
             response_data = {
                 'access_token': str(refresh.access_token),
                 'refresh_token': str(refresh),
-                'user': {
-                    'id': str(user.id),
-                    'email': user.email,
-                    'first_name': user.first_name,
-                    'last_name': user.last_name,
-                    'role': user.role,
-                }
+                'token_type': 'bearer',
+                'user': UserSerializer(user).data,
             }
-            
-            return Response(response_data, status=status.HTTP_200_OK)
-        
+            response_serializer = GoogleLoginResponseSerializer(data=response_data)
+            response_serializer.is_valid(raise_exception=True)
+            return Response(response_serializer.validated_data, status=status.HTTP_200_OK)
+
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
 # ============ USER MANAGEMENT ============
@@ -186,6 +302,8 @@ class EndUserProfileViewSet(viewsets.ModelViewSet):
         return EndUserProfileSerializer
 
     def get_queryset(self):
+        if is_admin_user(self.request.user):
+            return EndUserProfile.objects.select_related('user').order_by('-created_at')
         profile = get_end_user_profile(self.request.user)
         return EndUserProfile.objects.filter(id=profile.id)
 
@@ -253,14 +371,14 @@ class HealthcareNurseViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'])
     def me(self, request):
         """Get current nurse profile"""
-        nurse = HealthcareNurse.objects.get(user=request.user)
+        nurse = get_nurse_profile(request.user)
         serializer = self.get_serializer(nurse)
         return Response(serializer.data)
 
     @action(detail=False, methods=['post'])
     def complete_profile(self, request):
         """Complete nurse profile after registration"""
-        nurse = HealthcareNurse.objects.get(user=request.user)
+        nurse = get_nurse_profile(request.user)
         serializer = HealthcareNurseCreateSerializer(nurse, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
@@ -281,7 +399,6 @@ class HealthcareNurseViewSet(viewsets.ModelViewSet):
     def stats(self, request, pk=None):
         """Get nurse performance statistics"""
         nurse = self.get_object()
-        reviews = Review.objects.filter(nurse=nurse)
         return Response({
             'total_appointments': nurse.total_appointments,
             'completed_appointments': nurse.completed_appointments,
@@ -297,11 +414,11 @@ class AvailabilitySlotViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        nurse = HealthcareNurse.objects.get(user=self.request.user)
+        nurse = get_nurse_profile(self.request.user)
         return AvailabilitySlot.objects.filter(nurse=nurse)
 
     def perform_create(self, serializer):
-        nurse = HealthcareNurse.objects.get(user=self.request.user)
+        nurse = get_nurse_profile(self.request.user)
         serializer.save(nurse=nurse)
 
 # ============ APPOINTMENTS ============
@@ -330,7 +447,7 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         return AppointmentSerializer
 
     def _is_admin(self, user):
-        return user.role == UserRole.ADMIN or user.is_staff
+        return is_admin_user(user)
 
     def get_queryset(self):
         user = self.request.user
@@ -338,18 +455,51 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             return Appointment.objects.all()
         if is_end_user(user):
             return Appointment.objects.filter(end_user_profile__user=user)
-        if user.role == UserRole.HEALTHCARE_NURSE:
+        if user.role == UserRole.NURSE:
             nurse = HealthcareNurse.objects.filter(user=user).first()
             if not nurse:
                 return Appointment.objects.none()
             return Appointment.objects.filter(Q(nurse=nurse) | Q(suggested_nurse=nurse))
         return Appointment.objects.none()
 
+    def create(self, request, *args, **kwargs):
+        logger.info(
+            'Appointment create attempt user_id=%s role=%s payload_keys=%s',
+            getattr(request.user, 'id', None),
+            getattr(request.user, 'role', None),
+            sorted(request.data.keys()),
+        )
+        serializer = self.get_serializer(data=request.data)
+        if not serializer.is_valid():
+            logger.warning(
+                'Appointment create validation failed user_id=%s errors=%s',
+                getattr(request.user, 'id', None),
+                serializer.errors,
+            )
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        self.perform_create(serializer)
+        headers = self.get_success_headers(serializer.data)
+        created_id = serializer.instance.id if serializer.instance else None
+        logger.info(
+            'Appointment created id=%s user_id=%s family_member=%s status=%s',
+            created_id,
+            getattr(request.user, 'id', None),
+            serializer.validated_data.get('family_member').id if serializer.validated_data.get('family_member') else None,
+            serializer.instance.status if serializer.instance else None,
+        )
+        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+
     def perform_create(self, serializer):
         if not is_end_user(self.request.user):
+            logger.warning(
+                'Appointment create forbidden user_id=%s role=%s',
+                getattr(self.request.user, 'id', None),
+                getattr(self.request.user, 'role', None),
+            )
             raise PermissionDenied('Only end users can submit care requests.')
         end_user_profile = get_end_user_profile(self.request.user)
-        serializer.save(
+        appointment = serializer.save(
             end_user_profile=end_user_profile,
             status=AppointmentStatus.SUBMITTED,
             reviewed_by=None,
@@ -357,6 +507,24 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             decision_at=None,
             nurse=None
         )
+        logger.info(
+            'Appointment persisted id=%s end_user_profile=%s status=%s',
+            appointment.id,
+            end_user_profile.id,
+            appointment.status,
+        )
+        admin_users = CustomUser.objects.filter(
+            Q(role=UserRole.ADMIN) | Q(is_staff=True),
+            is_active=True,
+        ).distinct()
+        for admin_user in admin_users:
+            create_notification(
+                recipient=admin_user,
+                appointment=appointment,
+                event_type=NotificationEventType.REQUEST_SUBMITTED,
+                title='New Care Request Submitted',
+                message='A new care request has been submitted and is awaiting admin review.',
+            )
 
     def perform_update(self, serializer):
         appointment = self.get_object()
@@ -369,6 +537,8 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             raise PermissionDenied('You can only update your own care requests.')
         if appointment.status in [AppointmentStatus.APPROVED, AppointmentStatus.REJECTED]:
             raise PermissionDenied('Approved or rejected requests cannot be edited.')
+        if 'status' in serializer.validated_data:
+            raise ValidationError('Only admins can change appointment status.')
         serializer.save()
 
     @action(detail=False, methods=['get'], url_path='pending-matching')
@@ -528,42 +698,6 @@ class HealthRecordViewSet(viewsets.ModelViewSet):
 
 # ============ PRESCRIPTIONS ============
 
-class PrescriptionViewSet(viewsets.ModelViewSet):
-    """Prescription management"""
-    serializer_class = PrescriptionSerializer
-    permission_classes = [permissions.IsAuthenticated]
-    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
-    filterset_fields = ['is_active']
-    ordering = ['-start_date']
-
-    def get_queryset(self):
-        end_user_profile = get_end_user_profile(self.request.user)
-        return Prescription.objects.filter(end_user_profile=end_user_profile)
-
-    def get_serializer_class(self):
-        if self.action == 'create':
-            return PrescriptionCreateSerializer
-        elif self.action in ['update', 'partial_update']:
-            return PrescriptionUpdateSerializer
-        return PrescriptionSerializer
-
-    def perform_create(self, serializer):
-        end_user_profile = get_end_user_profile(self.request.user)
-        serializer.save(end_user_profile=end_user_profile)
-
-    @action(detail=True, methods=['post'])
-    def refill(self, request, pk=None):
-        """Request prescription refill"""
-        prescription = self.get_object()
-        if prescription.refills_remaining <= 0:
-            return Response(
-                {'detail': 'No refills remaining'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        prescription.refills_remaining -= 1
-        prescription.save()
-        return Response(PrescriptionSerializer(prescription).data)
-
 # ============ PAYMENTS ============
 
 class PaymentViewSet(viewsets.ModelViewSet):
@@ -585,9 +719,28 @@ class PaymentViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         end_user_profile = get_end_user_profile(self.request.user)
-        serializer.save(end_user_profile=end_user_profile)
+        payment = serializer.save(end_user_profile=end_user_profile)
 
-    @action(detail=False, methods=['post'])
+        appointment_ids = serializer.validated_data.get('appointment_ids') or []
+        if appointment_ids:
+            appointments = Appointment.objects.filter(
+                id__in=[a.id for a in appointment_ids],
+                end_user_profile=end_user_profile,
+            )
+            if appointments.count() != len(appointment_ids):
+                raise ValidationError('One or more appointments are not accessible.')
+            appointments.update(payment=payment)
+
+        if payment.method == 'MPESA' and not payment.mpesa_transaction_id:
+            payment.mpesa_transaction_id = f"MPESA-{uuid.uuid4()}"
+            payment.save(update_fields=['mpesa_transaction_id'])
+
+    @action(
+        detail=False,
+        methods=['post'],
+        permission_classes=[permissions.AllowAny],
+        authentication_classes=[],
+    )
     def mpesa_callback(self, request):
         """Handle M-Pesa payment callback"""
         mpesa_id = request.data.get('mpesa_transaction_id')
