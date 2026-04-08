@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+
+{% block title %}Login | Jamii Aide{% endblock %}
+
+{% block content %}
+<span class="eyebrow">Secure Access</span>
+<h1>Login</h1>
+<p class="muted">Use your Jamii Aide username and password to continue.</p>
+<form method="post">
+    {% csrf_token %}
+    {% include "jamii_aide/form_errors.html" %}
+    {{ form.as_p }}
+    <button type="submit">Login</button>
+</form>
+<div class="card-note">
+    <p class="muted">Successful login routes each account to the correct dashboard based on role.</p>
+</div>
+<p class="muted">Need an account? <a href="{% url 'signup-page' %}">Create one</a>.</p>
+{% endblock %}

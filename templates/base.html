@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}Jamii Aide{% endblock %}</title>
+    <style>
+        :root {
+            --bg: #f3efe7;
+            --surface: rgba(255, 252, 246, 0.92);
+            --surface-strong: #fffdf8;
+            --ink: #16312b;
+            --muted: #5f6f68;
+            --accent: #0f766e;
+            --accent-dark: #0b5d57;
+            --accent-soft: #cfeee7;
+            --line: rgba(22, 49, 43, 0.14);
+            --danger: #b42318;
+            --shadow: 0 28px 70px rgba(43, 61, 54, 0.15);
+        }
+        body {
+            margin: 0;
+            min-height: 100vh;
+            font-family: Georgia, "Times New Roman", serif;
+            color: var(--ink);
+            background:
+                radial-gradient(circle at top left, rgba(15, 118, 110, 0.16), transparent 34%),
+                radial-gradient(circle at bottom right, rgba(223, 182, 94, 0.16), transparent 28%),
+                linear-gradient(135deg, #f6f2e9 0%, #eef7f3 48%, #f2eee6 100%);
+        }
+        body::before {
+            content: "";
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            background-image:
+                linear-gradient(rgba(22, 49, 43, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(22, 49, 43, 0.03) 1px, transparent 1px);
+            background-size: 22px 22px;
+            mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.4), transparent 85%);
+        }
+        .page {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 2rem 1rem;
+            box-sizing: border-box;
+        }
+        .shell {
+            width: min(960px, 100%);
+            display: grid;
+            grid-template-columns: 1.05fr 0.95fr;
+            border: 1px solid var(--line);
+            background: rgba(255, 255, 255, 0.46);
+            backdrop-filter: blur(10px);
+            border-radius: 28px;
+            overflow: hidden;
+            box-shadow: var(--shadow);
+        }
+        .brand-panel {
+            position: relative;
+            padding: 3rem;
+            background:
+                linear-gradient(160deg, rgba(15, 118, 110, 0.9), rgba(19, 78, 74, 0.92)),
+                linear-gradient(160deg, #0f766e, #134e4a);
+            color: #f7fffd;
+        }
+        .brand-panel::after {
+            content: "";
+            position: absolute;
+            width: 220px;
+            height: 220px;
+            border-radius: 999px;
+            right: -60px;
+            bottom: -80px;
+            background: rgba(255, 255, 255, 0.09);
+        }
+        .brand-kicker {
+            display: inline-block;
+            font-size: 0.78rem;
+            letter-spacing: 0.16em;
+            text-transform: uppercase;
+            padding: 0.45rem 0.75rem;
+            border: 1px solid rgba(255, 255, 255, 0.28);
+            border-radius: 999px;
+            margin-bottom: 1.2rem;
+        }
+        .brand-panel h2 {
+            margin: 0;
+            font-size: clamp(2rem, 4vw, 3.4rem);
+            line-height: 0.95;
+        }
+        .brand-panel p {
+            max-width: 28rem;
+            margin: 1rem 0 0;
+            color: rgba(247, 255, 253, 0.86);
+            font-size: 1rem;
+            line-height: 1.7;
+        }
+        .brand-notes {
+            margin-top: 2rem;
+            padding-top: 1.5rem;
+            border-top: 1px solid rgba(255, 255, 255, 0.16);
+            font-size: 0.95rem;
+            color: rgba(247, 255, 253, 0.82);
+        }
+        .container {
+            padding: 2.5rem;
+            background: var(--surface);
+        }
+        h1 {
+            margin-top: 0;
+            margin-bottom: 0.5rem;
+            font-size: 2rem;
+            line-height: 1.05;
+        }
+        form p {
+            margin-bottom: 1rem;
+        }
+        label {
+            display: block;
+            font-weight: 600;
+            margin-bottom: 0.35rem;
+            color: var(--ink);
+        }
+        input {
+            width: 100%;
+            padding: 0.85rem 0.95rem;
+            border: 1px solid var(--line);
+            border-radius: 14px;
+            box-sizing: border-box;
+            background: var(--surface-strong);
+            color: var(--ink);
+            transition: border-color 160ms ease, box-shadow 160ms ease;
+        }
+        input:focus {
+            outline: none;
+            border-color: rgba(15, 118, 110, 0.6);
+            box-shadow: 0 0 0 4px rgba(15, 118, 110, 0.12);
+        }
+        button {
+            width: 100%;
+            padding: 0.95rem;
+            border: 0;
+            border-radius: 14px;
+            background: linear-gradient(135deg, var(--accent), var(--accent-dark));
+            color: #fff;
+            font-weight: 700;
+            cursor: pointer;
+            letter-spacing: 0.01em;
+            box-shadow: 0 14px 26px rgba(15, 118, 110, 0.22);
+            transition: transform 160ms ease, box-shadow 160ms ease;
+        }
+        button:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 18px 32px rgba(15, 118, 110, 0.26);
+        }
+        .messages {
+            list-style: none;
+            padding: 0;
+        }
+        .messages li {
+            padding: 0.85rem 1rem;
+            margin-bottom: 1rem;
+            border-radius: 14px;
+            background: var(--accent-soft);
+            color: var(--ink);
+        }
+        .errors {
+            color: var(--danger);
+            margin: 0.25rem 0 1rem;
+            padding-left: 1rem;
+        }
+        .muted {
+            color: var(--muted);
+            line-height: 1.7;
+        }
+        a {
+            color: var(--accent-dark);
+            font-weight: 700;
+            text-decoration-thickness: 2px;
+            text-underline-offset: 0.16em;
+        }
+        .eyebrow {
+            display: inline-block;
+            margin-bottom: 0.8rem;
+            color: var(--accent-dark);
+            font-size: 0.78rem;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+        }
+        .card-note {
+            margin-top: 1.25rem;
+            padding: 1rem 1.05rem;
+            border-radius: 16px;
+            background: rgba(15, 118, 110, 0.06);
+            border: 1px solid rgba(15, 118, 110, 0.12);
+        }
+        @media (max-width: 840px) {
+            .shell {
+                grid-template-columns: 1fr;
+            }
+            .brand-panel,
+            .container {
+                padding: 2rem;
+            }
+        }
+        @media (max-width: 520px) {
+            .page {
+                padding: 1rem;
+            }
+            .brand-panel,
+            .container {
+                padding: 1.4rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="page">
+        <div class="shell">
+            <aside class="brand-panel">
+                <span class="brand-kicker">Jamii Aide</span>
+                <h2>Care, coordinated with calm.</h2>
+                <p>Jamii Aide helps families arrange home healthcare with clearer roles, safer approvals, and better visibility from request to outcome.</p>
+                <div class="brand-notes">
+                    Role-aware dashboards now support `user`, `nurse`, and `admin` experiences with one shared authentication flow.
+                </div>
+            </aside>
+            <main class="container">
+                {% if messages %}
+                    <ul class="messages">
+                        {% for message in messages %}
+                            <li>{{ message }}</li>
+                        {% endfor %}
+                    </ul>
+                {% endif %}
+                {% block content %}{% endblock %}
+            </main>
+        </div>
+    </div>
+</body>
+</html>

@@ -11,7 +11,6 @@ from jamii_aide.views import (
     HealthcareNurseViewSet, AvailabilitySlotViewSet,
     AppointmentViewSet,
     HealthRecordViewSet,
-    PrescriptionViewSet,
     PaymentViewSet,
     ReviewViewSet,
     NotificationViewSet
@@ -25,7 +24,6 @@ router.register(r'nurses', HealthcareNurseViewSet, basename='nurse')
 router.register(r'availability-slots', AvailabilitySlotViewSet, basename='availability-slot')
 router.register(r'appointments', AppointmentViewSet, basename='appointment')
 router.register(r'health-records', HealthRecordViewSet, basename='health-record')
-router.register(r'prescriptions', PrescriptionViewSet, basename='prescription')
 router.register(r'payments', PaymentViewSet, basename='payment')
 router.register(r'reviews', ReviewViewSet, basename='review')
 router.register(r'notifications', NotificationViewSet, basename='notification')
@@ -33,6 +31,7 @@ router.register(r'notifications', NotificationViewSet, basename='notification')
 urlpatterns = [
     # Admin
     path('admin/', admin.site.urls),
+    path('', include('jamii_aide.urls')),
     
     # Auth endpoints
     path('api/auth/register/', RegisterView.as_view(), name='register'),

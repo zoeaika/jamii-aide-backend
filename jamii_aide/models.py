@@ -7,9 +7,9 @@ import uuid
 # ============ CHOICE FIELDS ============
 
 class UserRole(models.TextChoices):
-    END_USER = "END_USER", "End User"
-    HEALTHCARE_NURSE = "HEALTHCARE_NURSE", "Healthcare Nurse"
-    ADMIN = "ADMIN", "Administrator"
+    USER = "user", "User"
+    NURSE = "nurse", "Nurse"
+    ADMIN = "admin", "Admin"
 
 class AppointmentStatus(models.TextChoices):
     SUBMITTED = "SUBMITTED", "Submitted"
@@ -66,6 +66,7 @@ class ProfessionalType(models.TextChoices):
 
 
 class NotificationEventType(models.TextChoices):
+    REQUEST_SUBMITTED = "REQUEST_SUBMITTED", "Request Submitted"
     NURSE_SUGGESTED = "NURSE_SUGGESTED", "Nurse Suggested"
     REQUEST_APPROVED = "REQUEST_APPROVED", "Request Approved"
     REQUEST_REJECTED = "REQUEST_REJECTED", "Request Rejected"
@@ -80,7 +81,7 @@ class CustomUser(AbstractUser):
     role = models.CharField(
         max_length=20,
         choices=UserRole.choices,
-        default=UserRole.END_USER
+        default=UserRole.USER
     )
     profile_image = models.ImageField(upload_to='profiles/', blank=True, null=True)
     is_verified = models.BooleanField(default=False)

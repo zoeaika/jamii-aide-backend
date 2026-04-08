@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+
+{% block title %}{{ heading }} | Jamii Aide{% endblock %}
+
+{% block content %}
+<span class="eyebrow">Dashboard</span>
+<h1>{{ heading }}</h1>
+<p class="muted">You are signed in as {{ request.user.username }} with the role <strong>{{ request.user.role }}</strong>.</p>
+<div class="card-note">
+    <p class="muted">This is a backend-rendered placeholder dashboard. If you add the separate frontend app later, keep the same role routing contract.</p>
+</div>
+{% endblock %}
