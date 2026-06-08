@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from django.utils import timezone
 from uuid import uuid4
 from jamii_aide.models import (
     CustomUser, EndUserProfile, HealthcareNurse, FamilyMember,
@@ -118,20 +119,45 @@ class EndUserUpdateSerializer(EndUserProfileUpdateSerializer):
 
 class FamilyMemberSerializer(serializers.ModelSerializer):
     # Frontend/backward-compat aliases
+    name = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    age = serializers.IntegerField(write_only=True, required=False, allow_null=True)
+    relationship = serializers.CharField(write_only=True, required=False, allow_blank=True, allow_null=True)
+    conditions = serializers.ListField(
+        child=serializers.CharField(allow_blank=True),
+        write_only=True,
+        required=False,
+        allow_empty=True,
+    )
+    firstName = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    lastName = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    dateOfBirth = serializers.DateField(write_only=True, required=False)
+    idNumber = serializers.CharField(write_only=True, required=False, allow_blank=True, allow_null=True)
+    profileImage = serializers.ImageField(write_only=True, required=False, allow_null=True)
     phone_number = serializers.CharField(write_only=True, required=False, allow_blank=True, allow_null=True)
+    phoneNumber = serializers.CharField(write_only=True, required=False, allow_blank=True, allow_null=True)
     location = serializers.CharField(write_only=True, required=False, allow_blank=True, allow_null=True)
+    bloodType = serializers.CharField(write_only=True, required=False, allow_blank=True, allow_null=True)
+    knownAllergies = serializers.CharField(write_only=True, required=False, allow_blank=True, allow_null=True)
+    chronicConditions = serializers.CharField(write_only=True, required=False, allow_blank=True, allow_null=True)
+    currentMedications = serializers.CharField(write_only=True, required=False, allow_blank=True, allow_null=True)
+    emergencyContactName = serializers.CharField(write_only=True, required=False, allow_blank=True, allow_null=True)
+    emergencyPhoneNumber = serializers.CharField(write_only=True, required=False, allow_blank=True, allow_null=True)
+    emergencyPhone = serializers.CharField(write_only=True, required=False, allow_blank=True, allow_null=True)
+    isActive = serializers.BooleanField(write_only=True, required=False)
     full_name = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = FamilyMember
         fields = [
             'id', 'end_user_profile', 'first_name', 'last_name',
-            'full_name',
+            'full_name', 'name', 'age', 'relationship', 'conditions', 'firstName', 'lastName',
             'date_of_birth', 'gender', 'id_number', 'profile_image',
-            'phone', 'phone_number', 'city', 'location', 'address',
-            'email', 'blood_type', 'known_allergies',
-            'chronic_conditions', 'current_medications',
-            'emergency_contact', 'emergency_phone', 'is_active',
+            'dateOfBirth', 'idNumber', 'profileImage',
+            'phone', 'phone_number', 'phoneNumber', 'city', 'location', 'address',
+            'email', 'blood_type', 'bloodType', 'known_allergies', 'knownAllergies',
+            'chronic_conditions', 'chronicConditions', 'current_medications', 'currentMedications',
+            'emergency_contact', 'emergencyContactName', 'emergency_phone', 'emergencyPhone', 'emergencyPhoneNumber',
+            'is_active', 'isActive',
             'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'end_user_profile', 'created_at', 'updated_at']
@@ -139,7 +165,91 @@ class FamilyMemberSerializer(serializers.ModelSerializer):
     def get_full_name(self, obj):
         return str(obj)
 
+    def to_internal_value(self, data):
+        if hasattr(data, 'copy'):
+            data = data.copy()
+
+        name = data.get('name')
+        if name and not data.get('first_name') and not data.get('last_name'):
+            name_parts = str(name).strip().split(None, 1)
+            if name_parts:
+                data['first_name'] = name_parts[0]
+                data['last_name'] = name_parts[1] if len(name_parts) > 1 else 'Family Member'
+
+        full_name = data.get('full_name')
+        if full_name and not data.get('first_name') and not data.get('last_name'):
+            name_parts = str(full_name).strip().split(None, 1)
+            if name_parts:
+                data['first_name'] = name_parts[0]
+                if len(name_parts) > 1:
+                    data['last_name'] = name_parts[1]
+
+        if data.get('first_name') and data.get('last_name') == '':
+            data['last_name'] = 'Family Member'
+
+        alias_map = {
+            'firstName': 'first_name',
+            'lastName': 'last_name',
+            'dateOfBirth': 'date_of_birth',
+            'idNumber': 'id_number',
+            'profileImage': 'profile_image',
+            'phoneNumber': 'phone',
+            'bloodType': 'blood_type',
+            'knownAllergies': 'known_allergies',
+            'chronicConditions': 'chronic_conditions',
+            'currentMedications': 'current_medications',
+            'emergencyContactName': 'emergency_contact',
+            'emergencyPhoneNumber': 'emergency_phone',
+            'emergencyPhone': 'emergency_phone',
+            'isActive': 'is_active',
+        }
+        for alias, canonical in alias_map.items():
+            value = data.get(alias)
+            if value is not None and data.get(canonical) in (None, ''):
+                data[canonical] = value
+
+        if data.get('phone') in (None, '') and data.get('phone_number') not in (None, ''):
+            data['phone'] = data.get('phone_number')
+        if data.get('phone') in (None, '') and data.get('phoneNumber') not in (None, ''):
+            data['phone'] = data.get('phoneNumber')
+        if data.get('city') in (None, '') and data.get('location') not in (None, ''):
+            data['city'] = data.get('location')
+        if data.get('chronic_conditions') in (None, '') and data.get('medical_conditions') not in (None, ''):
+            data['chronic_conditions'] = data.get('medical_conditions')
+        if data.get('chronic_conditions') in (None, '') and data.get('conditions'):
+            if isinstance(data.get('conditions'), list):
+                data['chronic_conditions'] = ', '.join([str(item).strip() for item in data.get('conditions') if str(item).strip()])
+            else:
+                data['chronic_conditions'] = data.get('conditions')
+        if not data.get('date_of_birth') and data.get('age') not in (None, ''):
+            try:
+                age_value = int(data.get('age'))
+                today = timezone.now().date()
+                birth_year = today.year - age_value
+                data['date_of_birth'] = today.replace(year=birth_year)
+            except (TypeError, ValueError):
+                pass
+            except ValueError:
+                today = timezone.now().date()
+                birth_year = today.year - int(data.get('age'))
+                data['date_of_birth'] = today.replace(month=1, day=1, year=birth_year)
+        if not data.get('gender'):
+            data['gender'] = 'OTHER'
+        if data.get('gender'):
+            data['gender'] = str(data['gender']).upper()
+
+        return super().to_internal_value(data)
+
     def validate(self, attrs):
+        for alias in [
+            'name', 'age', 'relationship', 'conditions',
+            'firstName', 'lastName', 'dateOfBirth', 'idNumber', 'profileImage',
+            'phoneNumber', 'bloodType', 'knownAllergies', 'chronicConditions',
+            'currentMedications', 'emergencyContactName', 'emergencyPhoneNumber',
+            'emergencyPhone', 'isActive',
+        ]:
+            attrs.pop(alias, None)
+
         phone_number = attrs.pop('phone_number', None)
         location = attrs.pop('location', None)
 
@@ -147,6 +257,8 @@ class FamilyMemberSerializer(serializers.ModelSerializer):
             attrs['phone'] = phone_number
         if location is not None and attrs.get('city') in (None, ''):
             attrs['city'] = location
+        if attrs.get('gender'):
+            attrs['gender'] = str(attrs['gender']).upper()
         return attrs
 
 class FamilyMemberDetailSerializer(FamilyMemberSerializer):
@@ -283,7 +395,6 @@ class AppointmentCreateSerializer(serializers.ModelSerializer):
             'insurance_details',
             'last_procedure',
             'medical_conditions',
-            'prescriptions',
             'allergies',
             'emergency_contact',
             'consent_for_emergency_admission',

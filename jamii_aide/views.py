@@ -1,3 +1,5 @@
+from django.conf import settings
+from django.core.mail import send_mail
 from django.contrib import messages
 from django.contrib.auth import login as auth_login
 from django.contrib.auth.decorators import login_required
@@ -57,6 +59,18 @@ def create_notification(*, recipient, appointment, event_type, title, message):
         title=title,
         message=message,
     )
+
+    if recipient.email:
+        try:
+            send_mail(
+                subject=title,
+                message=message,
+                from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@jamiiaide.com'),
+                recipient_list=[recipient.email],
+                fail_silently=True,
+            )
+        except Exception as e:
+            logger.error('Failed to send email to %s: %s', recipient.email, str(e))
 
 
 def is_end_user(user):
@@ -336,6 +350,32 @@ class FamilyMemberViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         end_user_profile = get_end_user_profile(self.request.user)
         return FamilyMember.objects.filter(end_user_profile=end_user_profile)
+
+    def create(self, request, *args, **kwargs):
+        logger.info(
+            'Family member create attempt user_id=%s role=%s payload_keys=%s',
+            getattr(request.user, 'id', None),
+            getattr(request.user, 'role', None),
+            sorted(request.data.keys()),
+        )
+        serializer = self.get_serializer(data=request.data)
+        if not serializer.is_valid():
+            logger.warning(
+                'Family member create validation failed user_id=%s errors=%s payload=%s',
+                getattr(request.user, 'id', None),
+                serializer.errors,
+                dict(request.data),
+            )
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        self.perform_create(serializer)
+        headers = self.get_success_headers(serializer.data)
+        logger.info(
+            'Family member created id=%s user_id=%s',
+            serializer.instance.id if serializer.instance else None,
+            getattr(request.user, 'id', None),
+        )
+        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
     def perform_create(self, serializer):
         end_user_profile = get_end_user_profile(self.request.user)
@@ -695,8 +735,6 @@ class HealthRecordViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         end_user_profile = get_end_user_profile(self.request.user)
         serializer.save(end_user_profile=end_user_profile)
-
-# ============ PRESCRIPTIONS ============
 
 # ============ PAYMENTS ============
 

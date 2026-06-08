@@ -1,7 +1,7 @@
 from datetime import date, time, timedelta
 from unittest.mock import patch
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
@@ -651,6 +651,7 @@ class WebAuthenticationFlowTests(TestCase):
         self.assertRedirects(response, reverse("dashboard-nurse"))
 
 
+@override_settings(SECURE_SSL_REDIRECT=False)
 class FamilyMemberFlowTests(APITestCase):
     def setUp(self):
         self.end_user = CustomUser.objects.create_user(
@@ -682,6 +683,66 @@ class FamilyMemberFlowTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         created = FamilyMember.objects.get(first_name="Asha", last_name="Njeri")
         self.assertEqual(created.end_user_profile, self.end_user_profile)
+
+    def test_end_user_can_create_family_member_with_frontend_alias_fields(self):
+        self.client.force_authenticate(user=self.end_user)
+
+        response = self.client.post(
+            reverse("family-member-list"),
+            {
+                "full_name": "Mary Wanjiku",
+                "dateOfBirth": "1958-02-10",
+                "gender": "female",
+                "phoneNumber": "+254700000001",
+                "location": "Nairobi",
+                "bloodType": "O+",
+                "knownAllergies": "Penicillin",
+                "emergencyContactName": "Jane Wanjiku",
+                "emergencyPhone": "+254700000002",
+                "isActive": True,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        created = FamilyMember.objects.get(first_name="Mary", last_name="Wanjiku")
+        self.assertEqual(created.phone, "+254700000001")
+        self.assertEqual(created.city, "Nairobi")
+        self.assertEqual(created.gender, "FEMALE")
+        self.assertEqual(created.blood_type, "O+")
+        self.assertEqual(created.known_allergies, "Penicillin")
+        self.assertEqual(created.emergency_contact, "Jane Wanjiku")
+        self.assertEqual(created.emergency_phone, "+254700000002")
+
+    def test_end_user_can_create_family_member_with_legacy_minimal_payload(self):
+        self.client.force_authenticate(user=self.end_user)
+
+        response = self.client.post(
+            reverse("family-member-list"),
+            {
+                "name": "zoe",
+                "first_name": "zoe",
+                "last_name": "",
+                "age": 67,
+                "relationship": "Sibling",
+                "phone": "25412345678",
+                "location": "Nyali",
+                "city": "Nyali",
+                "address": "Bamburi",
+                "medical_conditions": "Diabetes",
+                "conditions": ["Diabetes"],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        created = FamilyMember.objects.get(first_name="zoe")
+        self.assertEqual(created.last_name, "Family Member")
+        self.assertEqual(created.gender, "OTHER")
+        self.assertEqual(created.city, "Nyali")
+        self.assertEqual(created.address, "Bamburi")
+        self.assertEqual(created.phone, "25412345678")
+        self.assertEqual(created.chronic_conditions, "Diabetes")
 
     def test_saved_family_member_appears_in_list_for_owner(self):
         member = FamilyMember.objects.create(
@@ -831,7 +892,7 @@ class NurseAvailabilitySlotFlowTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
 
-class HealthRecordPrescriptionPaymentReviewFlowTests(APITestCase):
+class HealthRecordPaymentReviewFlowTests(APITestCase):
     def setUp(self):
         self.end_user = CustomUser.objects.create_user(
             username="records_user",

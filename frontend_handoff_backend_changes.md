@@ -128,7 +128,6 @@ If you use the Django-rendered auth pages directly, these routes already exist:
 - `insurance_details`
 - `last_procedure`
 - `medical_conditions`
-- `prescriptions`
 - `allergies`
 - `emergency_contact`
 - `consent_for_emergency_admission`

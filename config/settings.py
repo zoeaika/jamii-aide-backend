@@ -1,4 +1,5 @@
 import os
+import sys
 from datetime import timedelta
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
@@ -68,6 +69,8 @@ def postgres_database_config():
 SECRET_KEY = config('SECRET_KEY', default='django-insecure-your-secret-key-change-in-production')
 DEBUG = env_bool('DEBUG', True)
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='localhost,127.0.0.1', cast=csv_to_list)
+if 'test' in sys.argv:
+    ALLOWED_HOSTS = list(set(ALLOWED_HOSTS + ['testserver']))
 
 if not DEBUG and (
     SECRET_KEY == 'django-insecure-your-secret-key-change-in-production'
@@ -205,6 +208,10 @@ SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 SECURE_SSL_REDIRECT = env_bool('SECURE_SSL_REDIRECT', not DEBUG)
 SESSION_COOKIE_SECURE = env_bool('SESSION_COOKIE_SECURE', not DEBUG)
 CSRF_COOKIE_SECURE = env_bool('CSRF_COOKIE_SECURE', not DEBUG)
+if 'test' in sys.argv:
+    SECURE_SSL_REDIRECT = False
+    SESSION_COOKIE_SECURE = False
+    CSRF_COOKIE_SECURE = False
 SECURE_HSTS_SECONDS = config('SECURE_HSTS_SECONDS', default=31536000 if not DEBUG else 0, cast=int)
 SECURE_HSTS_INCLUDE_SUBDOMAINS = env_bool('SECURE_HSTS_INCLUDE_SUBDOMAINS', not DEBUG)
 SECURE_HSTS_PRELOAD = env_bool('SECURE_HSTS_PRELOAD', not DEBUG)

@@ -36,7 +36,6 @@ class EvaluationType(models.TextChoices):
 
 class HealthRecordType(models.TextChoices):
     APPOINTMENT_NOTES = "APPOINTMENT_NOTES", "Appointment Notes"
-    PRESCRIPTION = "PRESCRIPTION", "Prescription"
     LAB_RESULT = "LAB_RESULT", "Lab Result"
     VITAL_SIGNS = "VITAL_SIGNS", "Vital Signs"
     DIAGNOSIS = "DIAGNOSIS", "Diagnosis"
@@ -427,43 +426,6 @@ class HealthRecord(models.Model):
 
     def __str__(self):
         return f"{self.get_type_display()} - {self.title}"
-
-# ============ PRESCRIPTION ============
-
-class Prescription(models.Model):
-    """Medication prescriptions"""
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    end_user_profile = models.ForeignKey(
-        EndUserProfile,
-        on_delete=models.CASCADE,
-        related_name='prescriptions'
-    )
-    medication_name = models.CharField(max_length=255)
-    dosage = models.CharField(max_length=100)
-    frequency = models.CharField(max_length=100)  # "3 times daily"
-    duration = models.CharField(max_length=100)  # "7 days"
-    start_date = models.DateField()
-    end_date = models.DateField(blank=True, null=True)
-    prescribed_by = models.CharField(max_length=255, blank=True, null=True)
-    notes = models.TextField(blank=True, null=True)
-    file = models.FileField(upload_to='prescriptions/', blank=True, null=True)
-    
-    is_active = models.BooleanField(default=True, db_index=True)
-    refills_remaining = models.IntegerField(default=0)
-    
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        db_table = 'prescriptions'
-        ordering = ['-start_date']
-        indexes = [
-            models.Index(fields=['is_active']),
-            models.Index(fields=['end_user_profile']),
-        ]
-
-    def __str__(self):
-        return f"{self.medication_name} - {self.dosage}"
 
 # ============ PAYMENT ============
 

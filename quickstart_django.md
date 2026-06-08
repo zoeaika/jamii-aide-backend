@@ -9,7 +9,6 @@ A production-ready Django + Django REST Framework backend for Jamii Aide healthc
 ✅ **Healthcare Nurse Profiles** - Complete nurse management system  
 ✅ **Appointment System** - Full lifecycle booking and management  
 ✅ **Health Records** - Store vital signs, notes, diagnoses  
-✅ **Prescriptions** - Medication management  
 ✅ **Payment Processing** - M-Pesa integration ready  
 ✅ **Reviews & Ratings** - Quality assurance system  
 ✅ **Admin Dashboard** - Django admin for management  
@@ -75,6 +74,7 @@ nano .env
 ```
 
 Key settings to configure:
+
 ```env
 SECRET_KEY=your-secret-key-here
 DEBUG=False  # Set to False in production
@@ -102,6 +102,7 @@ python manage.py createsuperuser
 ### Step 6: Copy Files to Project
 
 Copy the following files to your Django project:
+
 - `django_models.py` → `jamii_aide/models.py`
 - `django_serializers.py` → `jamii_aide/serializers.py`
 - `django_views.py` → `jamii_aide/views.py`
@@ -119,6 +120,7 @@ python manage.py runserver
 ## 📚 API Documentation
 
 Once running, access:
+
 - **Swagger UI**: `http://localhost:8000/api/schema/swagger/`
 - **ReDoc**: `http://localhost:8000/api/schema/redoc/`
 - **Admin Panel**: `http://localhost:8000/admin/`
@@ -214,6 +216,7 @@ GET    /api/reviews/nurse/{id}/stats/   # Nurse statistics
 ### Login Flow
 
 1. **Register**
+
    ```bash
    POST /api/auth/register/
    {
@@ -226,6 +229,7 @@ GET    /api/reviews/nurse/{id}/stats/   # Nurse statistics
    ```
 
 2. **Login**
+
    ```bash
    POST /api/auth/login/
    {
@@ -235,12 +239,14 @@ GET    /api/reviews/nurse/{id}/stats/   # Nurse statistics
    ```
 
 3. **Use Token**
+
    ```bash
    GET /api/family-members/
    Headers: Authorization: Bearer <access_token>
    ```
 
 4. **Refresh Token**
+
    ```bash
    POST /api/auth/refresh/
    {
@@ -378,6 +384,7 @@ python manage.py test
 Access Django admin at `http://localhost:8000/admin/`
 
 Manage:
+
 - Users & Roles
 - Family Members
 - Healthcare Nurses
@@ -463,6 +470,7 @@ python manage.py collectstatic --noinput
 ### CORS Errors
 
 Update `.env`:
+
 ```env
 CORS_ORIGINS=http://localhost:3000,https://yourdomain.com
 ```
@@ -470,6 +478,7 @@ CORS_ORIGINS=http://localhost:3000,https://yourdomain.com
 ### Token Expired
 
 Generate new token using refresh token:
+
 ```bash
 POST /api/auth/refresh/
 {
@@ -480,6 +489,7 @@ POST /api/auth/refresh/
 ## 📈 Performance Tips
 
 1. **Use select_related() and prefetch_related()**
+
    ```python
    queryset = Appointment.objects.select_related('nurse', 'family_member')
    ```
@@ -487,6 +497,7 @@ POST /api/auth/refresh/
 2. **Add database indexes** (already in models)
 
 3. **Enable caching**
+
    ```python
    from django.views.decorators.cache import cache_page
    
@@ -498,6 +509,7 @@ POST /api/auth/refresh/
 4. **Use pagination** (configured in settings)
 
 5. **Enable compression**
+
    ```python
    MIDDLEWARE = [
        'django.middleware.gzip.GZipMiddleware',
@@ -514,7 +526,7 @@ POST /api/auth/refresh/
 5. ✅ Test API endpoints
 6. ✅ Connect React frontend
 7. ⏳ Implement M-Pesa integration
-8. ⏳ Add email notifications
+8. ✅ Add email notifications
 9. ⏳ Configure Celery for async tasks
 10. ⏳ Deploy to production
 
@@ -522,8 +534,8 @@ POST /api/auth/refresh/
 
 - **API Docs**: `http://localhost:8000/api/schema/swagger/`
 - **Admin Panel**: `http://localhost:8000/admin/`
-- **Django Docs**: https://docs.djangoproject.com/
-- **DRF Docs**: https://www.django-rest-framework.org/
+- **Django Docs**: `https://docs.djangoproject.com/`
+- **DRF Docs**: `https://www.django-rest-framework.org/`
 
 ## 📝 License
 
@@ -531,4 +543,4 @@ POST /api/auth/refresh/
 
 ---
 
-Your Django backend is ready! Start building! 🎉
+Your Django backend is ready! Start building! 
