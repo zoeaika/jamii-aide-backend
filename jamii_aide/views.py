@@ -1,5 +1,3 @@
-from django.conf import settings
-from django.core.mail import send_mail
 from django.contrib import messages
 from django.contrib.auth import login as auth_login
 from django.contrib.auth.decorators import login_required
@@ -47,6 +45,7 @@ from jamii_aide.serializers import (
 from jamii_aide.google_serializers import GoogleAuthSerializer, GoogleLoginResponseSerializer
 from jamii_aide.forms import SignupForm, LoginForm
 
+from jamii_aide.tasks import send_email_task, send_payment_receipt_task
 
 logger = logging.getLogger('jamii_aide.appointments')
 
@@ -61,16 +60,11 @@ def create_notification(*, recipient, appointment, event_type, title, message):
     )
 
     if recipient.email:
-        try:
-            send_mail(
-                subject=title,
-                message=message,
-                from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@jamiiaide.com'),
-                recipient_list=[recipient.email],
-                fail_silently=True,
-            )
-        except Exception as e:
-            logger.error('Failed to send email to %s: %s', recipient.email, str(e))
+        send_email_task.delay(
+            subject=title,
+            message=message,
+            recipient_list=[recipient.email]
+        )
 
 
 def is_end_user(user):
@@ -772,6 +766,14 @@ class PaymentViewSet(viewsets.ModelViewSet):
         if payment.method == 'MPESA' and not payment.mpesa_transaction_id:
             payment.mpesa_transaction_id = f"MPESA-{uuid.uuid4()}"
             payment.save(update_fields=['mpesa_transaction_id'])
+        elif payment.method == 'STRIPE':
+            # TODO: Generate Stripe PaymentIntent here
+            # For now, just placeholder logic
+            pass
+        elif payment.method == 'PESAPAL':
+            # TODO: Submit order to PesaPal API here
+            # For now, just placeholder logic
+            pass
 
     @action(
         detail=False,
@@ -796,7 +798,34 @@ class PaymentViewSet(viewsets.ModelViewSet):
         payment.completed_at = timezone.now()
         payment.save()
         
+        # Trigger async task to send receipt email
+        send_payment_receipt_task.delay(payment.id)
+        
         return Response({'status': 'success', 'message': 'Payment processed'})
+
+    @action(
+        detail=False,
+        methods=['post'],
+        permission_classes=[permissions.AllowAny],
+        authentication_classes=[],
+    )
+    def stripe_webhook(self, request):
+        """Handle Stripe payment webhook"""
+        # Placeholder for Stripe webhook logic
+        # You'll need to verify the Stripe signature and process the event
+        return Response({'status': 'success', 'message': 'Stripe webhook received'})
+
+    @action(
+        detail=False,
+        methods=['get', 'post'],
+        permission_classes=[permissions.AllowAny],
+        authentication_classes=[],
+    )
+    def pesapal_ipn(self, request):
+        """Handle PesaPal IPN callback"""
+        # Placeholder for PesaPal IPN logic
+        # Typically involves querying PesaPal for transaction status using tracking ID
+        return Response({'status': 'success', 'message': 'PesaPal IPN received'})
 
     @action(detail=False, methods=['get'])
     def stats(self, request):

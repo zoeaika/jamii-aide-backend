@@ -33,6 +33,13 @@ CSRF_COOKIE_SECURE=True
 SECURE_HSTS_SECONDS=31536000
 SECURE_HSTS_INCLUDE_SUBDOMAINS=True
 SECURE_HSTS_PRELOAD=True
+EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend
+EMAIL_HOST=smtp.yourprovider.com
+EMAIL_PORT=587
+EMAIL_USE_TLS=True
+EMAIL_HOST_USER=your_smtp_username
+EMAIL_HOST_PASSWORD=your_smtp_password
+DEFAULT_FROM_EMAIL=notifications@jamiiaide.com
 ```
 
 *(Note: `${APP_DOMAIN}` is automatically populated by DigitalOcean).*

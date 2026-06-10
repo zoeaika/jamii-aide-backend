@@ -152,6 +152,27 @@ If you use the Django-rendered auth pages directly, these routes already exist:
 - `POST /api/notifications/mark-all-read/`
 - `GET /api/notifications/unread-count/`
 
+## Payment Integrations (M-Pesa, Stripe, PesaPal) endpoints
+
+- `GET /api/payments/`
+- `POST /api/payments/` (Initiate a payment)
+- `GET /api/payments/{id}/`
+- `POST /api/payments/{id}/refund/`
+- `GET /api/payments/stats/`
+- `POST /api/payments/mpesa-callback/` (Used internally by Safaricom API)
+- `POST /api/payments/stripe-webhook/` (Used internally by Stripe API)
+- `POST /api/payments/pesapal-ipn/` (Used internally by PesaPal IPN)
+
+### Payment Rules
+- `POST /api/payments/` requires `amount`, `method` (e.g., 'MPESA', 'STRIPE', 'PESAPAL'), and optional `appointment_ids`.
+- If `method` is 'MPESA', the backend automatically generates an internal transaction tracking ID.
+- If `method` is 'STRIPE' or 'PESAPAL', the backend similarly initializes the payment intent or tracking and returns the necessary data (such as client secret) to the frontend.
+
+## Asynchronous Background Tasks (Celery)
+
+- **Email Notifications:** The backend automatically dispatches email notifications asynchronously when appointments are created, approved, or rejected. The frontend will receive an immediate `200/201` API response without waiting for the email provider.
+- **M-Pesa Receipts:** Once the `mpesa-callback` is triggered by Safaricom and the payment is marked `COMPLETED`, a payment receipt email is sent to the user in the background. No extra frontend action is required.
+
 ## Nurse discovery
 
 Nurse `professional_type` values:
@@ -173,6 +194,7 @@ Filtering:
 5. Add admin flows for pending matching, suggest nurse, and final decision.
 6. Add notifications UI using `/api/notifications/*`.
 7. Add nurse filtering by `professional_type`.
+8. Connect payment flows using `/api/payments/`.
 
 ## Validation status
 

@@ -9,7 +9,7 @@ A production-ready Django + Django REST Framework backend for Jamii Aide healthc
 ✅ **Healthcare Nurse Profiles** - Complete nurse management system  
 ✅ **Appointment System** - Full lifecycle booking and management  
 ✅ **Health Records** - Store vital signs, notes, diagnoses  
-✅ **Payment Processing** - M-Pesa integration ready  
+✅ **Payment Processing** - M-Pesa, Stripe, and PesaPal integration ready  
 ✅ **Reviews & Ratings** - Quality assurance system  
 ✅ **Admin Dashboard** - Django admin for management  
 ✅ **API Documentation** - Auto-generated with DRF  
@@ -196,6 +196,8 @@ GET    /api/payments/              # List payments
 POST   /api/payments/              # Initiate payment
 GET    /api/payments/{id}/         # Get details
 POST   /api/payments/mpesa-callback/    # M-Pesa callback
+POST   /api/payments/stripe-webhook/    # Stripe webhook
+POST   /api/payments/pesapal-ipn/       # PesaPal IPN
 POST   /api/payments/{id}/refund/  # Refund payment
 GET    /api/payments/stats/        # Get statistics
 ```
@@ -525,9 +527,9 @@ POST /api/auth/refresh/
 4. ✅ Start server
 5. ✅ Test API endpoints
 6. ✅ Connect React frontend
-7. ⏳ Implement M-Pesa integration
+7. ✅ Implement M-Pesa integration
 8. ✅ Add email notifications
-9. ⏳ Configure Celery for async tasks
+9. ✅ Configure Celery for async tasks
 10. ⏳ Deploy to production
 
 ## 📞 Support
