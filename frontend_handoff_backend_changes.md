@@ -1,6 +1,7 @@
 # Frontend Handoff: Current Backend Contract
 
 ## Date
+
 - April 2, 2026
 
 ## Current auth model
@@ -143,6 +144,8 @@ If you use the Django-rendered auth pages directly, these routes already exist:
 - `POST /api/appointments/{id}/decision/`
 - `POST /api/appointments/{id}/confirm/`
 - `POST /api/appointments/{id}/cancel/`
+- `POST /api/appointments/{id}/reschedule/` (Payload: `appointment_date`, `start_time`, `end_time`)
+- `POST /api/appointments/{id}/no-show/`
 
 ## Notification endpoints
 
@@ -151,6 +154,18 @@ If you use the Django-rendered auth pages directly, these routes already exist:
 - `POST /api/notifications/{id}/mark-read/`
 - `POST /api/notifications/mark-all-read/`
 - `GET /api/notifications/unread-count/`
+
+## Admin User Management endpoints
+
+- `GET /api/admin/users/` (List all users, searchable)
+- `POST /api/admin/users/{id}/change-role/` (Payload: `{"role": "nurse"}`)
+
+## Nurse Earnings endpoints
+
+- `GET /api/nurse-earnings/` (Admin sees all; Nurse sees only their own)
+- `POST /api/nurse-earnings/` (Admin only: create an earning record)
+- `PUT/PATCH /api/nurse-earnings/{id}/` (Admin only: update earning record)
+- `POST /api/nurse-earnings/{id}/mark-paid/` (Admin only: marks earning as COMPLETED)
 
 ## Payment Integrations (M-Pesa, Stripe, PesaPal) endpoints
 
@@ -164,6 +179,7 @@ If you use the Django-rendered auth pages directly, these routes already exist:
 - `POST /api/payments/pesapal-ipn/` (Used internally by PesaPal IPN)
 
 ### Payment Rules
+
 - `POST /api/payments/` requires `amount`, `method` (e.g., 'MPESA', 'STRIPE', 'PESAPAL'), and optional `appointment_ids`.
 - If `method` is 'MPESA', the backend automatically generates an internal transaction tracking ID.
 - If `method` is 'STRIPE' or 'PESAPAL', the backend similarly initializes the payment intent or tracking and returns the necessary data (such as client secret) to the frontend.
@@ -195,6 +211,9 @@ Filtering:
 6. Add notifications UI using `/api/notifications/*`.
 7. Add nurse filtering by `professional_type`.
 8. Connect payment flows using `/api/payments/`.
+9. Implement Admin User Management page to change user roles.
+10. Add UI for Appointment Reschedule and No-Show actions.
+11. Implement Nurse Earnings view for Nurses and Payout management for Admins.
 
 ## Validation status
 
