@@ -19,6 +19,7 @@ from jamii_aide.models import (
     Payment,
     PaymentMethod,
     ProfessionalType,
+    ServiceType,
     Review,
     ShiftType,
     UserRole,
@@ -77,7 +78,7 @@ class AppointmentNotificationFlowTests(APITestCase):
             start_time=time(9, 0),
             end_time=time(11, 0),
             reason="Post-discharge care",
-            service_type="Home Visit",
+            service_type=ServiceType.WELLNESS_VISIT,
             shift_type=ShiftType.DAILY_PER_HOUR_12H,
             visit_address="Westlands",
             visit_city="Nairobi",
@@ -135,7 +136,7 @@ class AppointmentNotificationFlowTests(APITestCase):
             start_time=time(10, 0),
             end_time=time(12, 0),
             reason="Admission support",
-            service_type="Home Visit",
+            service_type=ServiceType.WELLNESS_VISIT,
             shift_type=ShiftType.LIVE_IN_24H,
             visit_address="Kilimani",
             visit_city="Nairobi",
@@ -298,7 +299,7 @@ class AppointmentNotificationFlowTests(APITestCase):
                 "start_time": "09:00:00",
                 "end_time": "11:00:00",
                 "reason": "Home care support",
-                "service_type": "Home Visit",
+                "service_type": ServiceType.WELLNESS_VISIT,
                 "shift_type": ShiftType.DAILY_PER_HOUR_12H,
                 "visit_address": "Karen",
                 "visit_city": "Nairobi",
@@ -310,7 +311,7 @@ class AppointmentNotificationFlowTests(APITestCase):
         created = Appointment.objects.get(
             end_user_profile=end_user_profile,
             reason="Home care support",
-            service_type="Home Visit",
+            service_type=ServiceType.WELLNESS_VISIT,
         )
         self.assertEqual(created.status, AppointmentStatus.SUBMITTED)
         admin_notification = Notification.objects.get(
@@ -360,7 +361,7 @@ class AppointmentNotificationFlowTests(APITestCase):
                 "start_time": "09:00:00",
                 "end_time": "11:00:00",
                 "reason": "Home care support",
-                "service_type": "Home Visit",
+                "service_type": ServiceType.WELLNESS_VISIT,
                 "shift_type": ShiftType.DAILY_PER_HOUR_12H,
                 "visit_address": "Karen",
                 "visit_city": "Nairobi",
@@ -377,6 +378,89 @@ class AppointmentNotificationFlowTests(APITestCase):
                 family_member=other_family_member,
             ).exists()
         )
+
+    def test_end_user_cannot_submit_care_request_with_invalid_service_type(self):
+        self.client.force_authenticate(user=self.end_user_user)
+
+        response = self.client.post(
+            reverse("appointment-list"),
+            {
+                "family_member": str(self.family_member.id),
+                "appointment_date": str(date.today() + timedelta(days=3)),
+                "start_time": "09:00:00",
+                "end_time": "11:00:00",
+                "reason": "Home care support",
+                "service_type": "HOME_VISIT",
+                "shift_type": ShiftType.DAILY_PER_HOUR_12H,
+                "visit_address": "Karen",
+                "visit_city": "Nairobi",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("service_type", response.data)
+
+    def test_owner_can_cancel_from_allowed_status(self):
+        self.client.force_authenticate(user=self.end_user_user)
+
+        response = self.client.post(
+            reverse("appointment-cancel", kwargs={"pk": self.appointment.id})
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.appointment.refresh_from_db()
+        self.assertEqual(self.appointment.status, AppointmentStatus.CANCELLED)
+
+    def test_cancel_is_idempotent_if_already_cancelled(self):
+        self.appointment.status = AppointmentStatus.CANCELLED
+        self.appointment.save(update_fields=["status", "updated_at"])
+
+        self.client.force_authenticate(user=self.end_user_user)
+        response = self.client.post(
+            reverse("appointment-cancel", kwargs={"pk": self.appointment.id})
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["status"], AppointmentStatus.CANCELLED)
+
+    def test_cancel_enforces_ownership_with_403(self):
+        other_user = CustomUser.objects.create_user(
+            username="other_owner",
+            email="other_owner@example.com",
+            password="StrongPass123!",
+            role=UserRole.USER,
+        )
+        EndUserProfile.objects.create(
+            user=other_user,
+            current_country="Canada",
+            current_city="Toronto",
+        )
+
+        self.client.force_authenticate(user=other_user)
+        response = self.client.post(
+            reverse("appointment-cancel", kwargs={"pk": self.appointment.id})
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_cancel_returns_404_when_appointment_not_found(self):
+        self.client.force_authenticate(user=self.end_user_user)
+        response = self.client.post(
+            reverse("appointment-cancel", kwargs={"pk": "00000000-0000-0000-0000-000000000000"})
+        )
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_cancel_returns_400_for_invalid_status_transition(self):
+        self.appointment.status = AppointmentStatus.APPROVED
+        self.appointment.save(update_fields=["status", "updated_at"])
+
+        self.client.force_authenticate(user=self.end_user_user)
+        response = self.client.post(
+            reverse("appointment-cancel", kwargs={"pk": self.appointment.id})
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
 
 class AuthenticationFlowTests(APITestCase):
@@ -762,6 +846,22 @@ class FamilyMemberFlowTests(APITestCase):
         self.assertIn(str(member.id), returned_ids)
         self.assertEqual(payload[0]["full_name"], "Saved Person")
 
+    def test_owner_can_retrieve_single_family_member_by_uuid_id(self):
+        member = FamilyMember.objects.create(
+            end_user_profile=self.end_user_profile,
+            first_name="Detail",
+            last_name="Member",
+            date_of_birth=date(1962, 1, 1),
+            gender="MALE",
+        )
+
+        self.client.force_authenticate(user=self.end_user)
+        response = self.client.get(reverse("family-member-detail", kwargs={"pk": str(member.id)}))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["id"], str(member.id))
+        self.assertEqual(response.data["full_name"], "Detail Member")
+
     def test_family_member_list_excludes_other_users_members(self):
         other_user = CustomUser.objects.create_user(
             username="other_family_member_user",
@@ -935,7 +1035,7 @@ class HealthRecordPaymentReviewFlowTests(APITestCase):
             start_time=time(9, 0),
             end_time=time(11, 0),
             reason="Follow-up",
-            service_type="Home Visit",
+            service_type=ServiceType.WELLNESS_VISIT,
             shift_type=ShiftType.DAILY_PER_HOUR_12H,
             visit_address="CBD",
             visit_city="Nairobi",

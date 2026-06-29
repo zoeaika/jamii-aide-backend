@@ -5,3 +5,4 @@ Thumbs.db
 venv/
 .env
 __pycache__/
+ROLE_STANDARDIZATION_COMPLETE.md

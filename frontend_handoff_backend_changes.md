@@ -27,6 +27,43 @@ Important rules:
 - `POST /api/auth/refresh/`
 - `GET /api/auth/me/`
 
+## Frontend token refresh strategy (recommended)
+
+The backend protects most `/api/*` endpoints. If the access token is missing or expired, protected calls return `401`.
+
+Recommended frontend behavior:
+
+1. Attach `Authorization: Bearer <access_token>` on every protected request.
+2. On first `401`, call `POST /api/auth/refresh/` once using the refresh token.
+3. Retry the original request exactly once with the new access token.
+4. If refresh fails (`401`/`403`), clear tokens and redirect to login.
+5. If several requests fail at the same time, queue them while one refresh is in progress.
+
+Axios interceptor shape (reference):
+
+- Request interceptor:
+  - Read access token from storage.
+  - Add `Authorization` header when token exists.
+
+- Response interceptor:
+  - If response is not `401`, reject normally.
+  - If request is already retried, reject to avoid loops.
+  - If refresh is already in progress, queue the request and replay after refresh succeeds.
+  - Otherwise:
+    - Mark refresh as in progress.
+    - Call `/api/auth/refresh/` with refresh token.
+    - Save returned access token.
+    - Replay queued requests.
+    - Retry the failed request once.
+    - On refresh failure, reject queued requests, clear auth state, and route to login.
+
+Practical notes:
+
+- Keep refresh endpoint call free of stale `Authorization` header from old access token.
+- Do not trigger multiple parallel refresh calls.
+- Keep access token lifetime short and refresh token lifetime longer for better security.
+- Seeing an occasional `401` before a successful refresh is expected; the interceptor should make it invisible to users.
+
 ## Register request
 
 ```json
@@ -117,6 +154,15 @@ If you use the Django-rendered auth pages directly, these routes already exist:
 - If admission support is enabled, `admission_questionnaire` is required.
 - Rejection requires `rejection_reason`.
 
+### Appointment service_type accepted values
+
+- `WELLNESS_VISIT`
+- `CARE_VISIT`
+- `CHRONIC_CONDITION_VISIT`
+- `DAILY_CARE`
+- `LIVE_IN_CARE`
+- `EMERGENCY_ACCOMPANIMENT`
+
 ### Family member source of truth
 
 - Load family members from `GET /api/family-members/`.
@@ -146,6 +192,21 @@ If you use the Django-rendered auth pages directly, these routes already exist:
 - `POST /api/appointments/{id}/cancel/`
 - `POST /api/appointments/{id}/reschedule/` (Payload: `appointment_date`, `start_time`, `end_time`)
 - `POST /api/appointments/{id}/no-show/`
+
+### Appointment cancel contract
+
+- Endpoint: `POST /api/appointments/{id}/cancel/`
+- Only the appointment owner can cancel.
+- Allowed current statuses for cancel by owner:
+  - `SUBMITTED`
+  - `UNDER_REVIEW`
+  - `NURSE_SUGGESTED`
+- Successful cancel sets `status` to `CANCELLED` and returns `200`.
+- If already `CANCELLED`, endpoint is idempotent and returns `200`.
+- Error semantics:
+  - `403` when requester is not the owner.
+  - `404` when appointment id does not exist.
+  - `400` when status transition to `CANCELLED` is not allowed.
 
 ## Notification endpoints
 

@@ -1,4 +1,5 @@
 from django.urls import path
+from django.urls import path
 
 from jamii_aide.views import (
     AdminDashboardView,

@@ -4,7 +4,8 @@ from uuid import uuid4
 from jamii_aide.models import (
     CustomUser, EndUserProfile, HealthcareNurse, FamilyMember,
     AvailabilitySlot, Appointment, HealthRecord,
-    Payment, Review, AppointmentStatus, Notification, UserRole
+    Payment, Review, AppointmentStatus, Notification, UserRole,
+    NurseEarning
 )
 
 # ============ AUTH SERIALIZERS ============
@@ -512,6 +513,14 @@ class PaymentInitiateSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         validated_data.pop('appointment_ids', None)
         return super().create(validated_data)
+
+# ============ NURSE EARNING SERIALIZERS ============
+
+class NurseEarningSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = NurseEarning
+        fields = '__all__'
+        read_only_fields = ['id', 'created_at', 'updated_at', 'paid_at']
 
 # ============ REVIEW SERIALIZERS ============
 

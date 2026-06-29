@@ -30,6 +30,15 @@ class ShiftType(models.TextChoices):
     LIVE_IN_24H = "LIVE_IN_24H", "Live In - 24 Hrs"
 
 
+class ServiceType(models.TextChoices):
+    WELLNESS_VISIT = "WELLNESS_VISIT", "Wellness Visit"
+    CARE_VISIT = "CARE_VISIT", "Care Visit"
+    CHRONIC_CONDITION_VISIT = "CHRONIC_CONDITION_VISIT", "Chronic Condition Visit"
+    DAILY_CARE = "DAILY_CARE", "Daily Care"
+    LIVE_IN_CARE = "LIVE_IN_CARE", "Live-in Care"
+    EMERGENCY_ACCOMPANIMENT = "EMERGENCY_ACCOMPANIMENT", "Emergency Accompaniment"
+
+
 class EvaluationType(models.TextChoices):
     ONLINE_CALL = "ONLINE_CALL", "Online Call"
     PHYSICAL_VISIT = "PHYSICAL_VISIT", "Physical Visit"
@@ -301,7 +310,10 @@ class Appointment(models.Model):
     reason = models.CharField(max_length=255)
     notes = models.TextField(blank=True, null=True)
     additional_notes = models.TextField(blank=True, null=True)
-    service_type = models.CharField(max_length=100)  # Home Visit, Consultation, etc.
+    service_type = models.CharField(
+        max_length=40,
+        choices=ServiceType.choices,
+    )
     shift_type = models.CharField(
         max_length=30,
         choices=ShiftType.choices,

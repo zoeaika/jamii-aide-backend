@@ -13,11 +13,14 @@ from jamii_aide.views import (
     HealthRecordViewSet,
     PaymentViewSet,
     ReviewViewSet,
-    NotificationViewSet
+    NotificationViewSet,
+    AdminUserViewSet,
+    NurseEarningViewSet
 )
 
 # Create router and register viewsets
 router = DefaultRouter()
+router.register(r'admin/users', AdminUserViewSet, basename='admin-user')
 router.register(r'end-users', EndUserViewSet, basename='end-user')
 router.register(r'family-members', FamilyMemberViewSet, basename='family-member')
 router.register(r'nurses', HealthcareNurseViewSet, basename='nurse')
@@ -27,6 +30,7 @@ router.register(r'health-records', HealthRecordViewSet, basename='health-record'
 router.register(r'payments', PaymentViewSet, basename='payment')
 router.register(r'reviews', ReviewViewSet, basename='review')
 router.register(r'notifications', NotificationViewSet, basename='notification')
+router.register(r'nurse-earnings', NurseEarningViewSet, basename='nurse-earning')
 
 urlpatterns = [
     # Admin

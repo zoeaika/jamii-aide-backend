@@ -23,7 +23,7 @@ from jamii_aide.models import (
     AvailabilitySlot, Appointment, HealthRecord,
     Payment, Review, AppointmentStatus, PaymentStatus, UserRole,
     NurseStatus,
-    Notification, NotificationEventType
+    Notification, NotificationEventType, NurseEarning
 )
 from jamii_aide.serializers import (
     UserSerializer, RegisterSerializer, LoginSerializer,
@@ -40,7 +40,7 @@ from jamii_aide.serializers import (
     HealthRecordUpdateSerializer,
     PaymentSerializer, PaymentInitiateSerializer,
     ReviewSerializer, ReviewCreateSerializer, ReviewDetailSerializer,
-    NotificationSerializer
+    NotificationSerializer, NurseEarningSerializer
 )
 from jamii_aide.google_serializers import GoogleAuthSerializer, GoogleLoginResponseSerializer
 from jamii_aide.forms import SignupForm, LoginForm
@@ -48,6 +48,27 @@ from jamii_aide.forms import SignupForm, LoginForm
 from jamii_aide.tasks import send_email_task, send_payment_receipt_task
 
 logger = logging.getLogger('jamii_aide.appointments')
+
+
+def enqueue_task_or_run(task, *args, **kwargs):
+    """Queue a Celery task; fall back to inline execution if broker is unavailable."""
+    try:
+        task.delay(*args, **kwargs)
+        return
+    except Exception as exc:
+        logger.warning(
+            'Celery enqueue failed for task=%s. Running inline. error=%s',
+            getattr(task, 'name', repr(task)),
+            exc,
+        )
+
+    try:
+        task(*args, **kwargs)
+    except Exception:
+        logger.exception(
+            'Inline fallback failed for task=%s',
+            getattr(task, 'name', repr(task)),
+        )
 
 
 def create_notification(*, recipient, appointment, event_type, title, message):
@@ -60,10 +81,11 @@ def create_notification(*, recipient, appointment, event_type, title, message):
     )
 
     if recipient.email:
-        send_email_task.delay(
+        enqueue_task_or_run(
+            send_email_task,
             subject=title,
             message=message,
-            recipient_list=[recipient.email]
+            recipient_list=[recipient.email],
         )
 
 
@@ -330,6 +352,50 @@ class EndUserViewSet(EndUserProfileViewSet):
         if self.action in ['partial_update', 'update']:
             return EndUserUpdateSerializer
         return EndUserSerializer
+
+
+class AdminUserViewSet(viewsets.ModelViewSet):
+    """Admin management of users (role assignment, etc.)"""
+    queryset = CustomUser.objects.all().order_by('-created_at')
+    serializer_class = UserSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    filter_backends = [filters.SearchFilter]
+    search_fields = ['first_name', 'last_name', 'email']
+
+    def check_permissions(self, request):
+        super().check_permissions(request)
+        if not is_admin_user(request.user):
+            raise PermissionDenied('Only admins can manage users.')
+
+    @action(detail=True, methods=['post'], url_path='change-role')
+    def change_role(self, request, pk=None):
+        user = self.get_object()
+        new_role = request.data.get('role')
+        
+        if new_role not in [UserRole.USER, UserRole.NURSE, UserRole.ADMIN]:
+            raise ValidationError({'role': 'Invalid role provided.'})
+            
+        user.role = new_role
+        user.save(update_fields=['role'])
+
+        # Ensure the correct profile exists for the new role
+        if new_role == UserRole.NURSE:
+            HealthcareNurse.objects.get_or_create(
+                user=user,
+                defaults={
+                    'license_number': f'PENDING-{str(user.id)[:8]}', # Unique placeholder
+                    'license_expiry': timezone.now().date(),
+                    'years_experience': 0,
+                    'status': NurseStatus.PENDING,
+                }
+            )
+        elif new_role == UserRole.USER:
+            EndUserProfile.objects.get_or_create(
+                user=user,
+                defaults={'current_country': '', 'current_city': ''}
+            )
+
+        return Response(UserSerializer(user).data)
 
 # ============ FAMILY MEMBERS ============
 
@@ -688,20 +754,62 @@ class AppointmentViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def cancel(self, request, pk=None):
         """Cancel appointment"""
-        appointment = self.get_object()
+        appointment = Appointment.objects.filter(pk=pk).first()
+        if not appointment:
+            return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        if appointment.end_user_profile.user_id != request.user.id:
+            return Response(
+                {'detail': 'You can only cancel your own appointments.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if appointment.status == AppointmentStatus.CANCELLED:
+            return Response(AppointmentSerializer(appointment).data, status=status.HTTP_200_OK)
+
         if appointment.status not in [
             AppointmentStatus.SUBMITTED,
             AppointmentStatus.UNDER_REVIEW,
             AppointmentStatus.NURSE_SUGGESTED,
-            AppointmentStatus.APPROVED,
-            AppointmentStatus.PENDING,
-            AppointmentStatus.CONFIRMED,
         ]:
             return Response(
-                {'detail': 'Cannot cancel this appointment'},
-                status=status.HTTP_400_BAD_REQUEST
+                {'detail': 'Invalid status transition to CANCELLED for this appointment.'},
+                status=status.HTTP_400_BAD_REQUEST,
             )
+
         appointment.status = AppointmentStatus.CANCELLED
+        appointment.save(update_fields=['status', 'updated_at'])
+        return Response(AppointmentSerializer(appointment).data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'])
+    def reschedule(self, request, pk=None):
+        """Reschedule appointment"""
+        appointment = self.get_object()
+        if appointment.status in [AppointmentStatus.COMPLETED, AppointmentStatus.CANCELLED]:
+            return Response({'detail': 'Cannot reschedule completed or cancelled appointments.'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        new_date = request.data.get('appointment_date')
+        start_time = request.data.get('start_time')
+        end_time = request.data.get('end_time')
+        
+        if not all([new_date, start_time, end_time]):
+            return Response({'detail': 'appointment_date, start_time, and end_time are required.'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        appointment.appointment_date = new_date
+        appointment.start_time = start_time
+        appointment.end_time = end_time
+        appointment.status = AppointmentStatus.RESCHEDULED
+        appointment.save()
+        
+        return Response(AppointmentSerializer(appointment).data)
+
+    @action(detail=True, methods=['post'], url_path='no-show')
+    def no_show(self, request, pk=None):
+        """Mark appointment as no-show"""
+        appointment = self.get_object()
+        if appointment.status != AppointmentStatus.CONFIRMED:
+            return Response({'detail': 'Only confirmed appointments can be marked as no-show'}, status=status.HTTP_400_BAD_REQUEST)
+        appointment.status = AppointmentStatus.NO_SHOW
         appointment.save()
         return Response(AppointmentSerializer(appointment).data)
 
@@ -798,8 +906,8 @@ class PaymentViewSet(viewsets.ModelViewSet):
         payment.completed_at = timezone.now()
         payment.save()
         
-        # Trigger async task to send receipt email
-        send_payment_receipt_task.delay(payment.id)
+        # Trigger async task to send receipt email.
+        enqueue_task_or_run(send_payment_receipt_task, payment.id)
         
         return Response({'status': 'success', 'message': 'Payment processed'})
 
@@ -889,6 +997,44 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
     def unread_count(self, request):
         count = self.get_queryset().filter(is_read=False).count()
         return Response({'unread_count': count})
+
+# ============ NURSE EARNINGS ============
+
+class NurseEarningViewSet(viewsets.ModelViewSet):
+    """Nurse earnings management"""
+    serializer_class = NurseEarningSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    filterset_fields = ['payment_status', 'nurse']
+    ordering = ['-payment_period_end']
+
+    def get_queryset(self):
+        if is_admin_user(self.request.user):
+            return NurseEarning.objects.all()
+        if self.request.user.role == UserRole.NURSE:
+            nurse = get_nurse_profile(self.request.user)
+            return NurseEarning.objects.filter(nurse=nurse)
+        return NurseEarning.objects.none()
+
+    def perform_create(self, serializer):
+        if not is_admin_user(self.request.user):
+            raise PermissionDenied('Only admins can create nurse earnings.')
+        serializer.save()
+
+    def perform_update(self, serializer):
+        if not is_admin_user(self.request.user):
+            raise PermissionDenied('Only admins can update nurse earnings.')
+        serializer.save()
+        
+    @action(detail=True, methods=['post'], url_path='mark-paid')
+    def mark_paid(self, request, pk=None):
+        if not is_admin_user(request.user):
+            raise PermissionDenied('Only admins can mark earnings as paid.')
+        earning = self.get_object()
+        earning.payment_status = PaymentStatus.COMPLETED
+        earning.paid_at = timezone.now()
+        earning.save(update_fields=['payment_status', 'paid_at'])
+        return Response(self.get_serializer(earning).data)
 
 # ============ REVIEWS ============
 
