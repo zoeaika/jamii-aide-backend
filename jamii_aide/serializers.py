@@ -13,6 +13,7 @@ from jamii_aide.models import (
 class UserSerializer(serializers.ModelSerializer):
     """Serializer for user registration and profile"""
     password = serializers.CharField(write_only=True, min_length=8)
+    role = serializers.SerializerMethodField()
     
     class Meta:
         model = CustomUser
@@ -25,6 +26,9 @@ class UserSerializer(serializers.ModelSerializer):
         extra_kwargs = {
             'password': {'write_only': True}
         }
+
+    def get_role(self, obj):
+        return obj.get_effective_role()
 
     def create(self, validated_data):
         password = validated_data.pop('password')
@@ -94,11 +98,12 @@ class LoginSerializer(serializers.Serializer):
 
 class EndUserProfileSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
+    user_id = serializers.UUIDField(source='user.id', read_only=True)
     
     class Meta:
         model = EndUserProfile
         fields = [
-            'id', 'user', 'current_country', 'current_city',
+            'id', 'user_id', 'user', 'current_country', 'current_city',
             'timezone', 'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']

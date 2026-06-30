@@ -1,5 +1,5 @@
 from django.db import models
-from django.contrib.auth.models import AbstractUser
+from django.contrib.auth.models import AbstractUser, UserManager
 from django.core.validators import MinValueValidator, MaxValueValidator
 from django.utils import timezone
 import uuid
@@ -10,6 +10,14 @@ class UserRole(models.TextChoices):
     USER = "user", "User"
     NURSE = "nurse", "Nurse"
     ADMIN = "admin", "Admin"
+
+
+class CustomUserManager(UserManager):
+    def create_superuser(self, username, email=None, password=None, **extra_fields):
+        extra_fields.setdefault('role', UserRole.ADMIN)
+        extra_fields.setdefault('is_staff', True)
+        extra_fields.setdefault('is_superuser', True)
+        return super().create_superuser(username, email=email, password=password, **extra_fields)
 
 class AppointmentStatus(models.TextChoices):
     SUBMITTED = "SUBMITTED", "Submitted"
@@ -98,6 +106,8 @@ class CustomUser(AbstractUser):
     updated_at = models.DateTimeField(auto_now=True)
     last_login = models.DateTimeField(blank=True, null=True)
 
+    objects = CustomUserManager()
+
     class Meta:
         db_table = 'users'
         ordering = ['-created_at']
@@ -109,6 +119,14 @@ class CustomUser(AbstractUser):
 
     def __str__(self):
         return f"{self.get_full_name()} ({self.get_role_display()})"
+
+    def get_effective_role(self):
+        if self.is_staff or self.is_superuser:
+            return UserRole.ADMIN
+        return self.role
+
+    def get_effective_role_display(self):
+        return UserRole(self.get_effective_role()).label
 
 # ============ DIASPORA USER ============
 

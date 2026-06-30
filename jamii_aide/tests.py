@@ -95,6 +95,7 @@ class AppointmentNotificationFlowTests(APITestCase):
 
         self.appointment.refresh_from_db()
         self.assertEqual(self.appointment.suggested_nurse, self.nurse)
+        self.assertEqual(self.appointment.nurse, self.nurse)
         self.assertEqual(self.appointment.status, AppointmentStatus.NURSE_SUGGESTED)
 
         notification = Notification.objects.get(
@@ -462,6 +463,149 @@ class AppointmentNotificationFlowTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
+    def test_nurse_list_is_scoped_to_assigned_appointments_only(self):
+        other_nurse_user = CustomUser.objects.create_user(
+            username="nurse2",
+            email="nurse2@example.com",
+            password="StrongPass123!",
+            role=UserRole.NURSE,
+        )
+        other_nurse = HealthcareNurse.objects.create(
+            user=other_nurse_user,
+            license_number="NURSE-002",
+            license_expiry=date.today() + timedelta(days=365),
+            years_experience=4,
+            status="APPROVED",
+            is_active=True,
+        )
+
+        own_assigned = Appointment.objects.create(
+            family_member=self.family_member,
+            end_user_profile=self.end_user_profile,
+            appointment_date=date.today() + timedelta(days=4),
+            start_time=time(9, 0),
+            end_time=time(10, 0),
+            reason="Own nurse assignment",
+            service_type=ServiceType.CARE_VISIT,
+            shift_type=ShiftType.DAILY_PER_HOUR_12H,
+            visit_address="Westlands",
+            visit_city="Nairobi",
+            status=AppointmentStatus.APPROVED,
+            nurse=self.nurse,
+        )
+        other_assigned = Appointment.objects.create(
+            family_member=self.family_member,
+            end_user_profile=self.end_user_profile,
+            appointment_date=date.today() + timedelta(days=5),
+            start_time=time(10, 0),
+            end_time=time(11, 0),
+            reason="Other nurse assignment",
+            service_type=ServiceType.CARE_VISIT,
+            shift_type=ShiftType.DAILY_PER_HOUR_12H,
+            visit_address="Kilimani",
+            visit_city="Nairobi",
+            status=AppointmentStatus.APPROVED,
+            nurse=other_nurse,
+        )
+
+        self.client.force_authenticate(user=self.nurse_user)
+        response = self.client.get(reverse("appointment-list"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        payload = response.data.get("results", response.data)
+        returned_ids = {item["id"] for item in payload}
+        self.assertIn(str(own_assigned.id), returned_ids)
+        self.assertNotIn(str(other_assigned.id), returned_ids)
+
+    def test_nurse_schedule_can_filter_by_date_and_status(self):
+        target_date = date.today() + timedelta(days=6)
+        own_approved = Appointment.objects.create(
+            family_member=self.family_member,
+            end_user_profile=self.end_user_profile,
+            appointment_date=target_date,
+            start_time=time(8, 0),
+            end_time=time(9, 0),
+            reason="Approved schedule item",
+            service_type=ServiceType.DAILY_CARE,
+            shift_type=ShiftType.DAILY_PER_HOUR_12H,
+            visit_address="CBD",
+            visit_city="Nairobi",
+            status=AppointmentStatus.APPROVED,
+            nurse=self.nurse,
+        )
+        Appointment.objects.create(
+            family_member=self.family_member,
+            end_user_profile=self.end_user_profile,
+            appointment_date=target_date,
+            start_time=time(10, 0),
+            end_time=time(11, 0),
+            reason="Confirmed schedule item",
+            service_type=ServiceType.DAILY_CARE,
+            shift_type=ShiftType.DAILY_PER_HOUR_12H,
+            visit_address="CBD",
+            visit_city="Nairobi",
+            status=AppointmentStatus.CONFIRMED,
+            nurse=self.nurse,
+        )
+        Appointment.objects.create(
+            family_member=self.family_member,
+            end_user_profile=self.end_user_profile,
+            appointment_date=target_date,
+            start_time=time(12, 0),
+            end_time=time(13, 0),
+            reason="Different status item",
+            service_type=ServiceType.DAILY_CARE,
+            shift_type=ShiftType.DAILY_PER_HOUR_12H,
+            visit_address="CBD",
+            visit_city="Nairobi",
+            status=AppointmentStatus.SUBMITTED,
+            nurse=self.nurse,
+        )
+
+        self.client.force_authenticate(user=self.nurse_user)
+        response = self.client.get(
+            reverse("appointment-list"),
+            {
+                "appointment_date": str(target_date),
+                "status": AppointmentStatus.APPROVED,
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        payload = response.data.get("results", response.data)
+        returned_ids = {item["id"] for item in payload}
+        self.assertIn(str(own_approved.id), returned_ids)
+        for item in payload:
+            self.assertEqual(item["status"], AppointmentStatus.APPROVED)
+
+    def test_nurse_list_includes_approved_records_assigned_via_suggested_nurse(self):
+        fallback_assigned = Appointment.objects.create(
+            family_member=self.family_member,
+            end_user_profile=self.end_user_profile,
+            appointment_date=date.today() + timedelta(days=7),
+            start_time=time(14, 0),
+            end_time=time(15, 0),
+            reason="Legacy suggested assignment",
+            service_type=ServiceType.CARE_VISIT,
+            shift_type=ShiftType.DAILY_PER_HOUR_12H,
+            visit_address="South B",
+            visit_city="Nairobi",
+            status=AppointmentStatus.APPROVED,
+            nurse=None,
+            suggested_nurse=self.nurse,
+        )
+
+        self.client.force_authenticate(user=self.nurse_user)
+        response = self.client.get(
+            reverse("appointment-list"),
+            {"status": AppointmentStatus.APPROVED},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        payload = response.data.get("results", response.data)
+        returned_ids = {item["id"] for item in payload}
+        self.assertIn(str(fallback_assigned.id), returned_ids)
+
 
 class AuthenticationFlowTests(APITestCase):
     def test_user_can_register_with_email_password_and_get_jwt_tokens(self):
@@ -734,6 +878,44 @@ class WebAuthenticationFlowTests(TestCase):
 
         self.assertRedirects(response, reverse("dashboard-nurse"))
 
+    def test_login_redirects_superuser_to_admin_dashboard(self):
+        superuser = CustomUser.objects.create_superuser(
+            username="web_admin",
+            email="webadmin@example.com",
+            password="StrongPass123!",
+        )
+
+        response = self.client.post(
+            reverse("login-page"),
+            {
+                "username": superuser.username,
+                "password": "StrongPass123!",
+            },
+        )
+
+        superuser.refresh_from_db()
+        self.assertEqual(superuser.role, UserRole.ADMIN)
+        self.assertRedirects(response, reverse("dashboard-admin"))
+
+    def test_existing_staff_user_with_standard_role_redirects_to_admin_dashboard(self):
+        staff_user = CustomUser.objects.create_user(
+            username="legacy_admin",
+            email="legacy_admin@example.com",
+            password="StrongPass123!",
+            role=UserRole.USER,
+            is_staff=True,
+        )
+
+        response = self.client.post(
+            reverse("login-page"),
+            {
+                "username": staff_user.username,
+                "password": "StrongPass123!",
+            },
+        )
+
+        self.assertRedirects(response, reverse("dashboard-admin"))
+
 
 @override_settings(SECURE_SSL_REDIRECT=False)
 class FamilyMemberFlowTests(APITestCase):
@@ -938,6 +1120,62 @@ class AdminEndUserAccessTests(APITestCase):
         payload = response.data.get("results", response.data)
         returned_ids = {item["id"] for item in payload}
         self.assertIn(str(self.end_user_profile.id), returned_ids)
+
+        listed_profile = next((item for item in payload if item["id"] == str(self.end_user_profile.id)), None)
+        self.assertIsNotNone(listed_profile)
+        self.assertEqual(listed_profile["user_id"], str(self.end_user.id))
+
+    def test_admin_can_change_role_using_end_user_profile_id(self):
+        self.client.force_authenticate(user=self.admin_user)
+
+        response = self.client.post(
+            reverse("admin-user-change-role", kwargs={"pk": str(self.end_user_profile.id)}),
+            {"role": UserRole.NURSE},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.end_user.refresh_from_db()
+        self.assertEqual(self.end_user.role, UserRole.NURSE)
+
+    def test_admin_can_change_role_using_user_id(self):
+        self.client.force_authenticate(user=self.admin_user)
+
+        response = self.client.post(
+            reverse("admin-user-change-role", kwargs={"pk": str(self.end_user.id)}),
+            {"role": UserRole.NURSE},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.end_user.refresh_from_db()
+        self.assertEqual(self.end_user.role, UserRole.NURSE)
+
+    def test_admin_can_change_role_with_uppercase_role_value(self):
+        self.client.force_authenticate(user=self.admin_user)
+
+        response = self.client.post(
+            reverse("admin-user-change-role", kwargs={"pk": str(self.end_user.id)}),
+            {"role": "ADMIN"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.end_user.refresh_from_db()
+        self.assertEqual(self.end_user.role, UserRole.ADMIN)
+
+    def test_admin_can_change_role_with_legacy_role_value(self):
+        self.client.force_authenticate(user=self.admin_user)
+
+        response = self.client.post(
+            reverse("admin-user-change-role", kwargs={"pk": str(self.end_user.id)}),
+            {"role": "END_USER"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.end_user.refresh_from_db()
+        self.assertEqual(self.end_user.role, UserRole.USER)
 
 
 class NurseAvailabilitySlotFlowTests(APITestCase):

@@ -1,6 +1,7 @@
 from django.contrib import messages
 from django.contrib.auth import login as auth_login
 from django.contrib.auth.decorators import login_required
+from django.http import Http404
 from django.shortcuts import redirect, render
 from django.utils.decorators import method_decorator
 from django.views import View
@@ -90,11 +91,11 @@ def create_notification(*, recipient, appointment, event_type, title, message):
 
 
 def is_end_user(user):
-    return user.role == UserRole.USER
+    return user.get_effective_role() == UserRole.USER
 
 
 def is_admin_user(user):
-    return user.role == UserRole.ADMIN or user.is_staff
+    return user.get_effective_role() == UserRole.ADMIN
 
 
 def get_end_user_profile(user):
@@ -111,7 +112,7 @@ def get_end_user_profile(user):
 
 
 def get_nurse_profile(user):
-    if user.role != UserRole.NURSE:
+    if user.get_effective_role() != UserRole.NURSE:
         raise PermissionDenied('Only healthcare nurses can access this resource.')
     nurse, _ = HealthcareNurse.objects.get_or_create(
         user=user,
@@ -126,11 +127,30 @@ def get_nurse_profile(user):
 
 
 def get_dashboard_url_for_role(user):
-    if user.role == UserRole.NURSE:
+    effective_role = user.get_effective_role()
+    if effective_role == UserRole.NURSE:
         return '/dashboard/nurse'
-    if user.role == UserRole.ADMIN:
+    if effective_role == UserRole.ADMIN:
         return '/dashboard/admin'
     return '/dashboard/user'
+
+
+def normalize_role_value(value):
+    if value is None:
+        return None
+
+    normalized = str(value).strip().lower()
+    role_aliases = {
+        'user': UserRole.USER,
+        'end_user': UserRole.USER,
+        'enduser': UserRole.USER,
+        'diaspora_user': UserRole.USER,
+        'nurse': UserRole.NURSE,
+        'healthcare_nurse': UserRole.NURSE,
+        'admin': UserRole.ADMIN,
+        'administrator': UserRole.ADMIN,
+    }
+    return role_aliases.get(normalized)
 
 
 class SignupView(View):
@@ -191,7 +211,7 @@ class DashboardView(View):
     heading = ''
 
     def get(self, request):
-        if request.user.role != self.expected_role:
+        if request.user.get_effective_role() != self.expected_role:
             messages.error(request, 'You do not have permission to view that dashboard.')
             return redirect(get_dashboard_url_for_role(request.user))
         return render(
@@ -199,6 +219,8 @@ class DashboardView(View):
             self.template_name,
             {
                 'heading': self.heading,
+                'effective_role': request.user.get_effective_role(),
+                'effective_role_display': request.user.get_effective_role_display(),
             },
         )
 
@@ -367,12 +389,22 @@ class AdminUserViewSet(viewsets.ModelViewSet):
         if not is_admin_user(request.user):
             raise PermissionDenied('Only admins can manage users.')
 
+    def get_object(self):
+        """Resolve by user UUID; for compatibility allow EndUserProfile UUIDs too."""
+        try:
+            return super().get_object()
+        except Http404:
+            profile = EndUserProfile.objects.filter(id=self.kwargs.get('pk')).select_related('user').first()
+            if profile:
+                return profile.user
+            raise
+
     @action(detail=True, methods=['post'], url_path='change-role')
     def change_role(self, request, pk=None):
         user = self.get_object()
-        new_role = request.data.get('role')
-        
-        if new_role not in [UserRole.USER, UserRole.NURSE, UserRole.ADMIN]:
+        new_role = normalize_role_value(request.data.get('role'))
+
+        if new_role is None:
             raise ValidationError({'role': 'Invalid role provided.'})
             
         user.role = new_role
@@ -529,7 +561,7 @@ class AppointmentViewSet(viewsets.ModelViewSet):
     serializer_class = AppointmentSerializer
     permission_classes = [permissions.IsAuthenticated]
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
-    filterset_fields = ['status', 'nurse', 'family_member']
+    filterset_fields = ['status', 'nurse', 'family_member', 'appointment_date']
     ordering_fields = ['appointment_date', 'created_at']
     ordering = ['-appointment_date']
 
@@ -552,14 +584,23 @@ class AppointmentViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         if self._is_admin(user):
-            return Appointment.objects.all()
+            return Appointment.objects.select_related(
+                'family_member', 'nurse', 'suggested_nurse', 'end_user_profile__user'
+            )
         if is_end_user(user):
-            return Appointment.objects.filter(end_user_profile__user=user)
+            return Appointment.objects.select_related(
+                'family_member', 'nurse', 'suggested_nurse', 'end_user_profile__user'
+            ).filter(end_user_profile__user=user)
         if user.role == UserRole.NURSE:
             nurse = HealthcareNurse.objects.filter(user=user).first()
             if not nurse:
                 return Appointment.objects.none()
-            return Appointment.objects.filter(Q(nurse=nurse) | Q(suggested_nurse=nurse))
+            # Privacy-first scope: nurse users only see appointments assigned to them.
+            # Include both direct assignment and suggested assignment for compatibility
+            # with older records that may not have `nurse` populated yet.
+            return Appointment.objects.select_related(
+                'family_member', 'nurse', 'suggested_nurse', 'end_user_profile__user'
+            ).filter(Q(nurse=nurse) | Q(suggested_nurse=nurse)).distinct()
         return Appointment.objects.none()
 
     def create(self, request, *args, **kwargs):
@@ -665,7 +706,10 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        appointment.suggested_nurse = serializer.validated_data['suggested_nurse']
+        selected_nurse = serializer.validated_data['suggested_nurse']
+        appointment.suggested_nurse = selected_nurse
+        # Keep nurse assignment in sync so nurse portals querying by `nurse` can see the schedule immediately.
+        appointment.nurse = selected_nurse
         appointment.status = AppointmentStatus.NURSE_SUGGESTED
         appointment.reviewed_by = request.user
         appointment.rejection_reason = None

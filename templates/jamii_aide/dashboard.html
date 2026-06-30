@@ -5,7 +5,7 @@
 {% block content %}
 <span class="eyebrow">Dashboard</span>
 <h1>{{ heading }}</h1>
-<p class="muted">You are signed in as {{ request.user.username }} with the role <strong>{{ request.user.role }}</strong>.</p>
+<p class="muted">You are signed in as {{ request.user.username }} with the role <strong>{{ effective_role_display|default:request.user.get_role_display }}</strong>.</p>
 <div class="card-note">
     <p class="muted">This is a backend-rendered placeholder dashboard. If you add the separate frontend app later, keep the same role routing contract.</p>
 </div>

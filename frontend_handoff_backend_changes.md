@@ -19,6 +19,25 @@ Important rules:
 - Only admins should assign `nurse` or `admin`.
 - Google sign-in also creates a `user` by default.
 
+## Frontend role and ID contract (must follow)
+
+Use only these role values:
+
+- `user`
+- `nurse`
+- `admin`
+
+For end-user list payloads:
+
+- `id` = **EndUserProfile ID** (profile resource)
+- `user_id` = **CustomUser ID** (user resource)
+
+When calling admin role change:
+
+- Endpoint: `POST /api/admin/users/{id}/change-role/`
+- Prefer `{id} = user_id` from end-user payload.
+- Send body: `{"role": "user" | "nurse" | "admin"}`
+
 ## Auth endpoints
 
 - `POST /api/auth/register/`
