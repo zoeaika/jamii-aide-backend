@@ -59,7 +59,7 @@ git clone <YOUR_REPO_URL> .
 If already cloned:
 
 ```bash
-git pull origin main
+git pull origin production
 ```
 
 ## 5. Create and Activate Virtual Environment
@@ -78,7 +78,7 @@ Create `/opt/jamii-aide-backend/.env`:
 ```env
 DEBUG=False
 SECRET_KEY=<strong-random-secret-at-least-32-chars>
-ALLOWED_HOSTS=<your-domain>,<www-your-domain>,<droplet-ip>
+ALLOWED_HOSTS=api.jamiiaide.com,<droplet-ip>
 
 # Database selection
 USE_SQLITE=False
@@ -86,9 +86,9 @@ DATABASE_URL=postgresql://<user>:<password>@<host>:5432/<db>?sslmode=require
 DB_SSLMODE=require
 DB_CONN_MAX_AGE=60
 
-# CORS/CSRF
-CORS_ORIGINS=https://<frontend-domain>
-CSRF_TRUSTED_ORIGINS=https://<your-domain>,https://<frontend-domain>
+# CORS/CSRF — list browser frontend origins (not the API hostname)
+CORS_ORIGINS=https://jamiiaide.com,https://app.jamiiaide.com
+CSRF_TRUSTED_ORIGINS=https://jamiiaide.com,https://app.jamiiaide.com
 
 # Security
 SECURE_SSL_REDIRECT=True
@@ -250,7 +250,7 @@ curl -I https://<your-domain>/api/
 
 ```bash
 cd /opt/jamii-aide-backend
-git pull origin main
+git pull origin production
 source venv/bin/activate
 pip install -r requirements_django.txt
 python manage.py migrate
