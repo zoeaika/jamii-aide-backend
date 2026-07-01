@@ -214,14 +214,32 @@ class DashboardView(View):
         if request.user.get_effective_role() != self.expected_role:
             messages.error(request, 'You do not have permission to view that dashboard.')
             return redirect(get_dashboard_url_for_role(request.user))
+
+        context = {
+            'heading': self.heading,
+            'effective_role': request.user.get_effective_role(),
+            'effective_role_display': request.user.get_effective_role_display(),
+        }
+
+        if request.user.get_effective_role() == UserRole.NURSE:
+            nurse = get_nurse_profile(request.user)
+            context['assigned_appointments'] = Appointment.objects.select_related(
+                'family_member', 'nurse__user', 'suggested_nurse__user', 'end_user_profile__user'
+            ).filter(Q(nurse=nurse) | Q(suggested_nurse=nurse)).order_by('appointment_date', 'start_time')
+        elif request.user.get_effective_role() == UserRole.ADMIN:
+            context['recent_appointments'] = Appointment.objects.select_related(
+                'family_member', 'nurse__user', 'suggested_nurse__user', 'end_user_profile__user'
+            ).order_by('-updated_at')[:12]
+        elif request.user.get_effective_role() == UserRole.USER:
+            end_user_profile = get_end_user_profile(request.user)
+            context['recent_appointments'] = Appointment.objects.select_related(
+                'family_member', 'nurse__user', 'suggested_nurse__user', 'end_user_profile__user'
+            ).filter(end_user_profile=end_user_profile).order_by('-updated_at')[:12]
+
         return render(
             request,
             self.template_name,
-            {
-                'heading': self.heading,
-                'effective_role': request.user.get_effective_role(),
-                'effective_role_display': request.user.get_effective_role_display(),
-            },
+            context,
         )
 
 
@@ -264,7 +282,8 @@ class RegisterView(APIView):
                     license_number='',
                     license_expiry=timezone.now().date(),
                     years_experience=0,
-                    status='PENDING'
+                    status=NurseStatus.APPROVED,
+                    is_verified=True,
                 )
             
             refresh = RefreshToken.for_user(user)
@@ -418,7 +437,9 @@ class AdminUserViewSet(viewsets.ModelViewSet):
                     'license_number': f'PENDING-{str(user.id)[:8]}', # Unique placeholder
                     'license_expiry': timezone.now().date(),
                     'years_experience': 0,
-                    'status': NurseStatus.PENDING,
+                    'status': NurseStatus.APPROVED,
+                    'is_verified': True,
+                    'is_active': True,
                 }
             )
         elif new_role == UserRole.USER:
@@ -514,7 +535,9 @@ class HealthcareNurseViewSet(viewsets.ModelViewSet):
         serializer = HealthcareNurseCreateSerializer(nurse, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
-            nurse.status = 'PENDING'
+            nurse.status = NurseStatus.APPROVED
+            nurse.is_verified = True
+            nurse.is_active = True
             nurse.save()
             return Response(serializer.data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -739,10 +762,11 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         appointment.decision_at = timezone.now()
 
         if decision == AppointmentStatus.APPROVED:
-            selected_nurse = appointment.suggested_nurse or appointment.nurse
+            selected_nurse = serializer.validated_data.get('nurse') or appointment.suggested_nurse or appointment.nurse
             if not selected_nurse:
                 raise ValidationError({'suggested_nurse': 'Suggest a nurse before approval.'})
             appointment.nurse = selected_nurse
+            appointment.suggested_nurse = selected_nurse
             appointment.status = AppointmentStatus.APPROVED
             appointment.rejection_reason = None
             event_type = NotificationEventType.REQUEST_APPROVED

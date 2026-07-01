@@ -9,4 +9,80 @@
 <div class="card-note">
     <p class="muted">This is a backend-rendered placeholder dashboard. If you add the separate frontend app later, keep the same role routing contract.</p>
 </div>
+
+{% if assigned_appointments %}
+<section class="card" style="margin-top: 24px;">
+    <h2>Assigned Appointments</h2>
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Family Member</th>
+                    <th>Date</th>
+                    <th>Time</th>
+                    <th>Status</th>
+                    <th>Assigned Nurse</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for appointment in assigned_appointments %}
+                <tr>
+                    <td>{{ appointment.family_member.first_name }} {{ appointment.family_member.last_name }}</td>
+                    <td>{{ appointment.appointment_date }}</td>
+                    <td>{{ appointment.start_time }} - {{ appointment.end_time }}</td>
+                    <td>{{ appointment.get_status_display }}</td>
+                    <td>
+                        {% if appointment.nurse %}
+                            {{ appointment.nurse.user.get_full_name|default:appointment.nurse.user.email }}
+                        {% elif appointment.suggested_nurse %}
+                            {{ appointment.suggested_nurse.user.get_full_name|default:appointment.suggested_nurse.user.email }}
+                        {% else %}
+                            Not assigned
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+{% endif %}
+
+{% if recent_appointments %}
+<section class="card" style="margin-top: 24px;">
+    <h2>Recent Appointments</h2>
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Family Member</th>
+                    <th>Date</th>
+                    <th>Time</th>
+                    <th>Status</th>
+                    <th>Assigned Nurse</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for appointment in recent_appointments %}
+                <tr>
+                    <td>{{ appointment.family_member.first_name }} {{ appointment.family_member.last_name }}</td>
+                    <td>{{ appointment.appointment_date }}</td>
+                    <td>{{ appointment.start_time }} - {{ appointment.end_time }}</td>
+                    <td>{{ appointment.get_status_display }}</td>
+                    <td>
+                        {% if appointment.nurse %}
+                            {{ appointment.nurse.user.get_full_name|default:appointment.nurse.user.email }}
+                        {% elif appointment.suggested_nurse %}
+                            {{ appointment.suggested_nurse.user.get_full_name|default:appointment.suggested_nurse.user.email }}
+                        {% else %}
+                            Not assigned
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+{% endif %}
 {% endblock %}
