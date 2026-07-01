@@ -230,6 +230,8 @@ SOCIALACCOUNT_PROVIDERS = {
     }
 }
 
+GOOGLE_OAUTH_CLOCK_SKEW_SECONDS = config('GOOGLE_OAUTH_CLOCK_SKEW_SECONDS', default=5, cast=int)
+
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,

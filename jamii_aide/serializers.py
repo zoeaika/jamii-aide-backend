@@ -305,12 +305,33 @@ class HealthcareNurseSerializer(serializers.ModelSerializer):
             'rating', 'total_reviews', 'created_at', 'updated_at'
         ]
 
+
+class AppointmentScheduleSerializer(serializers.ModelSerializer):
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    family_member = FamilyMemberSerializer(read_only=True)
+
+    class Meta:
+        model = Appointment
+        fields = [
+            'id', 'family_member', 'appointment_date', 'start_time', 'end_time',
+            'reason', 'service_type', 'shift_type', 'status', 'status_display',
+        ]
+        read_only_fields = fields
+
 class HealthcareNurseDetailSerializer(HealthcareNurseSerializer):
     """Nurse with availability slots"""
     availability_slots = AvailabilitySlotSerializer(many=True, read_only=True)
+    assigned_appointments = serializers.SerializerMethodField()
     
     class Meta(HealthcareNurseSerializer.Meta):
-        fields = HealthcareNurseSerializer.Meta.fields + ['availability_slots']
+        fields = HealthcareNurseSerializer.Meta.fields + ['availability_slots', 'assigned_appointments']
+
+    def get_assigned_appointments(self, obj):
+        appointments = obj.appointments.select_related('family_member', 'end_user_profile__user').order_by(
+            'appointment_date',
+            'start_time',
+        )
+        return AppointmentScheduleSerializer(appointments, many=True, context=self.context).data
 
 class HealthcareNurseUpdateSerializer(serializers.ModelSerializer):
     class Meta:
@@ -333,6 +354,9 @@ class HealthcareNurseCreateSerializer(serializers.ModelSerializer):
 
 class AppointmentSerializer(serializers.ModelSerializer):
     status_display = serializers.CharField(source='get_status_display', read_only=True)
+    family_member = FamilyMemberSerializer(read_only=True)
+    nurse = HealthcareNurseSerializer(read_only=True)
+    suggested_nurse = HealthcareNurseSerializer(read_only=True)
     
     class Meta:
         model = Appointment
@@ -435,9 +459,33 @@ class AppointmentDecisionSerializer(serializers.Serializer):
     decision = serializers.ChoiceField(
         choices=[AppointmentStatus.APPROVED, AppointmentStatus.REJECTED]
     )
+    nurse = serializers.PrimaryKeyRelatedField(
+        queryset=HealthcareNurse.objects.filter(status='APPROVED', is_active=True),
+        required=False,
+        allow_null=True,
+    )
+    assigned_nurse = serializers.PrimaryKeyRelatedField(
+        queryset=HealthcareNurse.objects.filter(status='APPROVED', is_active=True),
+        required=False,
+        allow_null=True,
+    )
+    suggested_nurse = serializers.PrimaryKeyRelatedField(
+        queryset=HealthcareNurse.objects.filter(status='APPROVED', is_active=True),
+        required=False,
+        allow_null=True,
+    )
     rejection_reason = serializers.CharField(required=False, allow_blank=True)
 
     def validate(self, attrs):
+        selected_nurse = attrs.get('nurse') or attrs.get('assigned_nurse') or attrs.get('suggested_nurse')
+        attrs['nurse'] = selected_nurse
+        if attrs['decision'] == AppointmentStatus.APPROVED and not selected_nurse:
+            appointment = getattr(self, 'instance', None)
+            if appointment and (appointment.suggested_nurse or appointment.nurse):
+                return attrs
+            raise serializers.ValidationError({
+                'nurse': 'Provide a nurse when approving a request.'
+            })
         if attrs['decision'] == AppointmentStatus.REJECTED and not attrs.get('rejection_reason'):
             raise serializers.ValidationError({
                 'rejection_reason': 'Rejection reason is required when rejecting a request.'

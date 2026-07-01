@@ -108,20 +108,20 @@ class AppointmentNotificationFlowTests(APITestCase):
     def test_admin_decision_creates_approved_and_rejected_notifications(self):
         self.client.force_authenticate(user=self.admin_user)
 
-        suggest_url = reverse("appointment-suggest-nurse", kwargs={"pk": self.appointment.id})
-        self.client.post(suggest_url, {"suggested_nurse": str(self.nurse.id)}, format="json")
-
         decision_url = reverse("appointment-decision", kwargs={"pk": self.appointment.id})
         approved_response = self.client.post(
             decision_url,
-            {"decision": AppointmentStatus.APPROVED},
+            {"decision": AppointmentStatus.APPROVED, "assigned_nurse": str(self.nurse.id)},
             format="json",
         )
         self.assertEqual(approved_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(approved_response.data["nurse"]["id"], str(self.nurse.id))
+        self.assertEqual(approved_response.data["nurse"]["user"]["email"], self.nurse_user.email)
 
         self.appointment.refresh_from_db()
         self.assertEqual(self.appointment.status, AppointmentStatus.APPROVED)
         self.assertEqual(self.appointment.nurse, self.nurse)
+        self.assertEqual(self.appointment.suggested_nurse, self.nurse)
         self.assertTrue(
             Notification.objects.filter(
                 appointment=self.appointment,
@@ -160,6 +160,27 @@ class AppointmentNotificationFlowTests(APITestCase):
             event_type=NotificationEventType.REQUEST_REJECTED,
         )
         self.assertIn("incomplete medical details", rejected_notification.message.lower())
+
+    def test_nurse_profile_exposes_assigned_schedule(self):
+        self.client.force_authenticate(user=self.admin_user)
+        self.client.post(
+            reverse("appointment-suggest-nurse", kwargs={"pk": self.appointment.id}),
+            {"suggested_nurse": str(self.nurse.id)},
+            format="json",
+        )
+        self.client.post(
+            reverse("appointment-decision", kwargs={"pk": self.appointment.id}),
+            {"decision": AppointmentStatus.APPROVED},
+            format="json",
+        )
+
+        self.client.force_authenticate(user=self.nurse_user)
+        response = self.client.get(reverse("nurse-me"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        assigned_ids = {item["id"] for item in response.data["assigned_appointments"]}
+        self.assertIn(str(self.appointment.id), assigned_ids)
+        self.assertEqual(response.data["assigned_appointments"][0]["family_member"]["id"], str(self.family_member.id))
 
     def test_notifications_are_scoped_to_authenticated_recipient(self):
         other_user = CustomUser.objects.create_user(
@@ -726,6 +747,25 @@ class AuthenticationFlowTests(APITestCase):
         self.assertTrue(EndUserProfile.objects.filter(user=user).exists())
 
     @patch("jamii_aide.google_serializers.id_token.verify_oauth2_token")
+    def test_google_login_passes_clock_skew_to_verifier(self, mock_verify):
+        mock_verify.return_value = {
+            "iss": "https://accounts.google.com",
+            "sub": "google-user-skew-123",
+            "email": "skew@example.com",
+            "email_verified": True,
+        }
+
+        response = self.client.post(
+            reverse("google-login"),
+            {"credential": "skew-token"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        mock_verify.assert_called_once()
+        self.assertEqual(mock_verify.call_args.kwargs["clock_skew_in_seconds"], 5)
+
+    @patch("jamii_aide.google_serializers.id_token.verify_oauth2_token")
     def test_google_login_updates_existing_user(self, mock_verify):
         existing_user = CustomUser.objects.create_user(
             username="google_existing",
@@ -759,6 +799,24 @@ class AuthenticationFlowTests(APITestCase):
         self.assertTrue(existing_user.is_verified)
 
     @patch("jamii_aide.google_serializers.id_token.verify_oauth2_token")
+    def test_google_login_accepts_id_token_field(self, mock_verify):
+        mock_verify.return_value = {
+            "iss": "https://accounts.google.com",
+            "sub": "google-user-321",
+            "email": "altfield@example.com",
+            "email_verified": True,
+        }
+
+        response = self.client.post(
+            reverse("google-login"),
+            {"id_token": "alternate-google-id-token"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["user"]["email"], "altfield@example.com")
+
+    @patch("jamii_aide.google_serializers.id_token.verify_oauth2_token")
     def test_google_login_rejects_unverified_email(self, mock_verify):
         mock_verify.return_value = {
             "iss": "https://accounts.google.com",
@@ -774,7 +832,8 @@ class AuthenticationFlowTests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("credential", response.data)
+        self.assertIn("non_field_errors", response.data)
+        self.assertIn("verified", str(response.data["non_field_errors"][0]))
 
 
 class HealthcareNurseProfessionalTypeTests(APITestCase):
@@ -915,6 +974,123 @@ class WebAuthenticationFlowTests(TestCase):
         )
 
         self.assertRedirects(response, reverse("dashboard-admin"))
+
+    def test_nurse_dashboard_shows_assigned_schedule(self):
+        nurse_user = CustomUser.objects.create_user(
+            username="dashboard_nurse",
+            email="dashboard_nurse@example.com",
+            password="StrongPass123!",
+            role=UserRole.NURSE,
+        )
+        nurse = HealthcareNurse.objects.create(
+            user=nurse_user,
+            license_number="NURSE-DASH-1",
+            license_expiry=date.today() + timedelta(days=365),
+            years_experience=4,
+            status="APPROVED",
+            is_active=True,
+        )
+        end_user = CustomUser.objects.create_user(
+            username="dashboard_user",
+            email="dashboard_user@example.com",
+            password="StrongPass123!",
+            role=UserRole.USER,
+        )
+        end_user_profile = EndUserProfile.objects.create(
+            user=end_user,
+            current_country="Kenya",
+            current_city="Nairobi",
+        )
+        family_member = FamilyMember.objects.create(
+            end_user_profile=end_user_profile,
+            first_name="Test",
+            last_name="Patient",
+            date_of_birth=date(1965, 6, 1),
+            gender="FEMALE",
+        )
+        Appointment.objects.create(
+            family_member=family_member,
+            end_user_profile=end_user_profile,
+            appointment_date=date.today() + timedelta(days=2),
+            start_time=time(9, 0),
+            end_time=time(10, 0),
+            reason="Care visit",
+            service_type=ServiceType.CARE_VISIT,
+            shift_type=ShiftType.DAILY_PER_HOUR_12H,
+            visit_address="Westlands",
+            visit_city="Nairobi",
+            status=AppointmentStatus.APPROVED,
+            nurse=nurse,
+        )
+
+        self.client.force_login(nurse_user)
+        response = self.client.get(reverse("dashboard-nurse"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertContains(response, "Assigned Appointments")
+        self.assertContains(response, "Test Patient")
+
+    def test_admin_dashboard_shows_assigned_nurse(self):
+        admin_user = CustomUser.objects.create_user(
+            username="dashboard_admin",
+            email="dashboard_admin@example.com",
+            password="StrongPass123!",
+            role=UserRole.ADMIN,
+            is_staff=True,
+        )
+        nurse_user = CustomUser.objects.create_user(
+            username="dashboard_admin_nurse",
+            email="dashboard_admin_nurse@example.com",
+            password="StrongPass123!",
+            role=UserRole.NURSE,
+        )
+        nurse = HealthcareNurse.objects.create(
+            user=nurse_user,
+            license_number="NURSE-DASH-2",
+            license_expiry=date.today() + timedelta(days=365),
+            years_experience=7,
+            status="APPROVED",
+            is_active=True,
+        )
+        end_user = CustomUser.objects.create_user(
+            username="dashboard_owner",
+            email="dashboard_owner@example.com",
+            password="StrongPass123!",
+            role=UserRole.USER,
+        )
+        end_user_profile = EndUserProfile.objects.create(
+            user=end_user,
+            current_country="Kenya",
+            current_city="Mombasa",
+        )
+        family_member = FamilyMember.objects.create(
+            end_user_profile=end_user_profile,
+            first_name="Admin",
+            last_name="Target",
+            date_of_birth=date(1968, 2, 2),
+            gender="MALE",
+        )
+        Appointment.objects.create(
+            family_member=family_member,
+            end_user_profile=end_user_profile,
+            appointment_date=date.today() + timedelta(days=3),
+            start_time=time(11, 0),
+            end_time=time(12, 0),
+            reason="Approval check",
+            service_type=ServiceType.CARE_VISIT,
+            shift_type=ShiftType.DAILY_PER_HOUR_12H,
+            visit_address="CBD",
+            visit_city="Nairobi",
+            status=AppointmentStatus.APPROVED,
+            nurse=nurse,
+        )
+
+        self.client.force_login(admin_user)
+        response = self.client.get(reverse("dashboard-admin"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertContains(response, "Recent Appointments")
+        self.assertContains(response, nurse_user.get_full_name() or nurse_user.email)
 
 
 @override_settings(SECURE_SSL_REDIRECT=False)
@@ -1137,6 +1313,9 @@ class AdminEndUserAccessTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.end_user.refresh_from_db()
         self.assertEqual(self.end_user.role, UserRole.NURSE)
+        nurse_profile = HealthcareNurse.objects.get(user=self.end_user)
+        self.assertEqual(nurse_profile.status, "APPROVED")
+        self.assertTrue(nurse_profile.is_verified)
 
     def test_admin_can_change_role_using_user_id(self):
         self.client.force_authenticate(user=self.admin_user)
@@ -1150,6 +1329,9 @@ class AdminEndUserAccessTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.end_user.refresh_from_db()
         self.assertEqual(self.end_user.role, UserRole.NURSE)
+        nurse_profile = HealthcareNurse.objects.get(user=self.end_user)
+        self.assertEqual(nurse_profile.status, "APPROVED")
+        self.assertTrue(nurse_profile.is_verified)
 
     def test_admin_can_change_role_with_uppercase_role_value(self):
         self.client.force_authenticate(user=self.admin_user)
