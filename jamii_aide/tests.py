@@ -19,6 +19,8 @@ from jamii_aide.models import (
     Payment,
     PaymentMethod,
     ProfessionalType,
+    Organization,
+    OrganizationAdministrator,
     ServiceType,
     Review,
     ShiftType,
@@ -1410,6 +1412,218 @@ class NurseAvailabilitySlotFlowTests(APITestCase):
         self.client.force_authenticate(user=self.end_user)
         response = self.client.get(reverse("availability-slot-list"))
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+
+class OrganizationAdminContractTests(APITestCase):
+    def setUp(self):
+        self.platform_admin = CustomUser.objects.create_user(
+            username="platform_admin",
+            email="platform_admin@example.com",
+            password="StrongPass123!",
+            role=UserRole.ADMIN,
+            is_staff=True,
+        )
+        self.org_a = Organization.objects.create(name="Org A", description="Alpha org")
+        self.org_b = Organization.objects.create(name="Org B", description="Beta org")
+
+        self.org_admin_user = CustomUser.objects.create_user(
+            username="org_admin_1",
+            email="org_admin_1@example.com",
+            password="StrongPass123!",
+            role=UserRole.ORGANIZATION_ADMIN,
+        )
+        self.org_admin_profile = OrganizationAdministrator.objects.create(
+            user=self.org_admin_user,
+            organization=self.org_a,
+        )
+
+        self.nurse_user_a = CustomUser.objects.create_user(
+            username="org_nurse_a",
+            email="org_nurse_a@example.com",
+            password="StrongPass123!",
+            role=UserRole.NURSE,
+        )
+        self.nurse_a = HealthcareNurse.objects.create(
+            user=self.nurse_user_a,
+            organization=self.org_a,
+            license_number="ORG-A-NURSE",
+            license_expiry=date.today() + timedelta(days=365),
+            years_experience=5,
+            status="APPROVED",
+            is_active=True,
+        )
+
+        self.nurse_user_b = CustomUser.objects.create_user(
+            username="org_nurse_b",
+            email="org_nurse_b@example.com",
+            password="StrongPass123!",
+            role=UserRole.NURSE,
+        )
+        self.nurse_b = HealthcareNurse.objects.create(
+            user=self.nurse_user_b,
+            organization=self.org_b,
+            license_number="ORG-B-NURSE",
+            license_expiry=date.today() + timedelta(days=365),
+            years_experience=6,
+            status="APPROVED",
+            is_active=True,
+        )
+
+        self.end_user = CustomUser.objects.create_user(
+            username="org_patient_owner",
+            email="org_patient_owner@example.com",
+            password="StrongPass123!",
+            role=UserRole.USER,
+        )
+        self.end_user_profile = EndUserProfile.objects.create(
+            user=self.end_user,
+            current_country="Kenya",
+            current_city="Nairobi",
+        )
+        self.family_member = FamilyMember.objects.create(
+            end_user_profile=self.end_user_profile,
+            first_name="Scoped",
+            last_name="Patient",
+            date_of_birth=date(1962, 1, 1),
+            gender="FEMALE",
+        )
+
+        self.appointment_org_a = Appointment.objects.create(
+            family_member=self.family_member,
+            end_user_profile=self.end_user_profile,
+            appointment_date=date.today() + timedelta(days=1),
+            start_time=time(8, 0),
+            end_time=time(9, 0),
+            reason="Org A appointment",
+            service_type=ServiceType.WELLNESS_VISIT,
+            shift_type=ShiftType.DAILY_PER_HOUR_12H,
+            visit_address="Westlands",
+            visit_city="Nairobi",
+            status=AppointmentStatus.NURSE_SUGGESTED,
+            nurse=self.nurse_a,
+            suggested_nurse=self.nurse_a,
+        )
+        self.appointment_org_b = Appointment.objects.create(
+            family_member=self.family_member,
+            end_user_profile=self.end_user_profile,
+            appointment_date=date.today() + timedelta(days=2),
+            start_time=time(10, 0),
+            end_time=time(11, 0),
+            reason="Org B appointment",
+            service_type=ServiceType.WELLNESS_VISIT,
+            shift_type=ShiftType.DAILY_PER_HOUR_12H,
+            visit_address="Kilimani",
+            visit_city="Nairobi",
+            status=AppointmentStatus.NURSE_SUGGESTED,
+            nurse=self.nurse_b,
+            suggested_nurse=self.nurse_b,
+        )
+
+    def test_role_change_to_org_admin_requires_organization_id(self):
+        target_user = CustomUser.objects.create_user(
+            username="promote_me",
+            email="promote_me@example.com",
+            password="StrongPass123!",
+            role=UserRole.USER,
+        )
+        self.client.force_authenticate(user=self.platform_admin)
+
+        missing_org_response = self.client.post(
+            reverse("admin-user-change-role", kwargs={"pk": str(target_user.id)}),
+            {"role": UserRole.ORGANIZATION_ADMIN},
+            format="json",
+        )
+        self.assertEqual(missing_org_response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("organization_id", missing_org_response.data)
+
+        success_response = self.client.post(
+            reverse("admin-user-change-role", kwargs={"pk": str(target_user.id)}),
+            {"role": UserRole.ORGANIZATION_ADMIN, "organization_id": str(self.org_a.id)},
+            format="json",
+        )
+        self.assertEqual(success_response.status_code, status.HTTP_200_OK)
+        target_user.refresh_from_db()
+        self.assertEqual(target_user.role, UserRole.ORGANIZATION_ADMIN)
+        self.assertTrue(
+            OrganizationAdministrator.objects.filter(user=target_user, organization=self.org_a).exists()
+        )
+
+    def test_admin_setup_apis_exist_and_me_endpoint_works(self):
+        self.client.force_authenticate(user=self.platform_admin)
+
+        organizations_response = self.client.get(reverse("admin-organization-list"))
+        self.assertEqual(organizations_response.status_code, status.HTTP_200_OK)
+
+        create_org_response = self.client.post(
+            reverse("admin-organization-list"),
+            {"name": "Org C", "description": "Gamma", "is_active": True},
+            format="json",
+        )
+        self.assertEqual(create_org_response.status_code, status.HTTP_201_CREATED)
+
+        target_user = CustomUser.objects.create_user(
+            username="new_org_admin_user",
+            email="new_org_admin_user@example.com",
+            password="StrongPass123!",
+            role=UserRole.USER,
+        )
+        create_org_admin_response = self.client.post(
+            reverse("admin-organization-admin-list"),
+            {"user_id": str(target_user.id), "organization_id": str(self.org_b.id)},
+            format="json",
+        )
+        self.assertEqual(create_org_admin_response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(create_org_admin_response.data["organization"]["id"], str(self.org_b.id))
+
+        self.client.force_authenticate(user=self.org_admin_user)
+        me_response = self.client.get(reverse("admin-organization-admin-me"))
+        self.assertEqual(me_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(me_response.data["organization"]["id"], str(self.org_a.id))
+
+    def test_org_admin_sees_only_own_org_nurses_and_appointments(self):
+        self.client.force_authenticate(user=self.org_admin_user)
+
+        nurse_list_response = self.client.get(reverse("nurse-list"))
+        self.assertEqual(nurse_list_response.status_code, status.HTTP_200_OK)
+        nurse_payload = nurse_list_response.data.get("results", nurse_list_response.data)
+        nurse_ids = {item["id"] for item in nurse_payload}
+        self.assertIn(str(self.nurse_a.id), nurse_ids)
+        self.assertNotIn(str(self.nurse_b.id), nurse_ids)
+
+        appointment_list_response = self.client.get(reverse("appointment-list"))
+        self.assertEqual(appointment_list_response.status_code, status.HTTP_200_OK)
+        appointment_payload = appointment_list_response.data.get("results", appointment_list_response.data)
+        appointment_ids = {item["id"] for item in appointment_payload}
+        self.assertIn(str(self.appointment_org_a.id), appointment_ids)
+        self.assertNotIn(str(self.appointment_org_b.id), appointment_ids)
+
+        pending_response = self.client.get(reverse("appointment-pending-matching"))
+        self.assertEqual(pending_response.status_code, status.HTTP_200_OK)
+        pending_payload = pending_response.data
+        if isinstance(pending_payload, dict):
+            pending_payload = pending_payload.get("results", pending_payload)
+        pending_ids = {item["id"] for item in pending_payload}
+        self.assertIn(str(self.appointment_org_a.id), pending_ids)
+        self.assertNotIn(str(self.appointment_org_b.id), pending_ids)
+
+    def test_org_admin_cannot_assign_cross_org_nurse(self):
+        self.client.force_authenticate(user=self.org_admin_user)
+
+        suggest_cross_org_response = self.client.post(
+            reverse("appointment-suggest-nurse", kwargs={"pk": self.appointment_org_a.id}),
+            {"suggested_nurse": str(self.nurse_b.id)},
+            format="json",
+        )
+        self.assertEqual(suggest_cross_org_response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("suggested_nurse", suggest_cross_org_response.data)
+
+        decision_cross_org_response = self.client.post(
+            reverse("appointment-decision", kwargs={"pk": self.appointment_org_a.id}),
+            {"decision": AppointmentStatus.APPROVED, "nurse": str(self.nurse_b.id)},
+            format="json",
+        )
+        self.assertEqual(decision_cross_org_response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("nurse", decision_cross_org_response.data)
 
 
 class HealthRecordPaymentReviewFlowTests(APITestCase):

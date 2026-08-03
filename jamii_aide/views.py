@@ -24,12 +24,14 @@ from jamii_aide.models import (
     AvailabilitySlot, Appointment, HealthRecord,
     Payment, Review, AppointmentStatus, PaymentStatus, UserRole,
     NurseStatus,
-    Notification, NotificationEventType, NurseEarning
+    Notification, NotificationEventType, NurseEarning,
+    Organization, OrganizationAdministrator
 )
 from jamii_aide.serializers import (
     UserSerializer, RegisterSerializer, LoginSerializer,
     EndUserProfileSerializer, EndUserProfileUpdateSerializer,
     EndUserSerializer, EndUserUpdateSerializer,
+    OrganizationSerializer, OrganizationAdministratorSerializer,
     FamilyMemberSerializer, FamilyMemberDetailSerializer,
     HealthcareNurseSerializer, HealthcareNurseDetailSerializer,
     HealthcareNurseUpdateSerializer, HealthcareNurseCreateSerializer,
@@ -98,6 +100,19 @@ def is_admin_user(user):
     return user.get_effective_role() == UserRole.ADMIN
 
 
+def is_organization_admin_user(user):
+    return user.get_effective_role() == UserRole.ORGANIZATION_ADMIN
+
+
+def get_organization_admin_profile(user):
+    if not is_organization_admin_user(user):
+        raise PermissionDenied('Only organization admins can access this resource.')
+    profile = OrganizationAdministrator.objects.filter(user=user).select_related('organization').first()
+    if not profile:
+        raise PermissionDenied('Organization admin profile is not configured.')
+    return profile
+
+
 def get_end_user_profile(user):
     if not is_end_user(user):
         raise PermissionDenied('Only end users can access this resource.')
@@ -132,6 +147,8 @@ def get_dashboard_url_for_role(user):
         return '/dashboard/nurse'
     if effective_role == UserRole.ADMIN:
         return '/dashboard/admin'
+    if effective_role == UserRole.ORGANIZATION_ADMIN:
+        return '/dashboard/organization-admin'
     return '/dashboard/user'
 
 
@@ -149,6 +166,9 @@ def normalize_role_value(value):
         'healthcare_nurse': UserRole.NURSE,
         'admin': UserRole.ADMIN,
         'administrator': UserRole.ADMIN,
+        'organization_admin': UserRole.ORGANIZATION_ADMIN,
+        'org_admin': UserRole.ORGANIZATION_ADMIN,
+        'organizationadmin': UserRole.ORGANIZATION_ADMIN,
     }
     return role_aliases.get(normalized)
 
@@ -256,6 +276,11 @@ class NurseDashboardView(DashboardView):
 class AdminDashboardView(DashboardView):
     expected_role = UserRole.ADMIN
     heading = 'Admin Dashboard'
+
+
+class OrganizationAdminDashboardView(DashboardView):
+    expected_role = UserRole.ORGANIZATION_ADMIN
+    heading = 'Organization Admin Dashboard'
 
 # ============ AUTHENTICATION VIEWS ============
 
@@ -426,8 +451,19 @@ class AdminUserViewSet(viewsets.ModelViewSet):
         if new_role is None:
             raise ValidationError({'role': 'Invalid role provided.'})
             
+        role_update_fields = ['role']
+        if new_role == UserRole.ORGANIZATION_ADMIN:
+            organization_id = request.data.get('organization_id')
+            if not organization_id:
+                raise ValidationError({'organization_id': 'organization_id is required for organization_admin role.'})
+            organization = Organization.objects.filter(id=organization_id, is_active=True).first()
+            if not organization:
+                raise ValidationError({'organization_id': 'Invalid organization_id.'})
+        else:
+            organization = None
+
         user.role = new_role
-        user.save(update_fields=['role'])
+        user.save(update_fields=role_update_fields)
 
         # Ensure the correct profile exists for the new role
         if new_role == UserRole.NURSE:
@@ -442,6 +478,11 @@ class AdminUserViewSet(viewsets.ModelViewSet):
                     'is_active': True,
                 }
             )
+        elif new_role == UserRole.ORGANIZATION_ADMIN:
+            OrganizationAdministrator.objects.update_or_create(
+                user=user,
+                defaults={'organization': organization},
+            )
         elif new_role == UserRole.USER:
             EndUserProfile.objects.get_or_create(
                 user=user,
@@ -449,6 +490,71 @@ class AdminUserViewSet(viewsets.ModelViewSet):
             )
 
         return Response(UserSerializer(user).data)
+
+class OrganizationViewSet(viewsets.ModelViewSet):
+    """Admin setup endpoints for organizations."""
+    queryset = Organization.objects.all().order_by('name')
+    serializer_class = OrganizationSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def check_permissions(self, request):
+        super().check_permissions(request)
+        if not is_admin_user(request.user):
+            raise PermissionDenied('Only admins can manage organizations.')
+
+
+class OrganizationAdministratorViewSet(viewsets.ModelViewSet):
+    """Admin setup endpoints for organization administrators."""
+    queryset = OrganizationAdministrator.objects.select_related('user', 'organization').all().order_by('-created_at')
+    serializer_class = OrganizationAdministratorSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def check_permissions(self, request):
+        super().check_permissions(request)
+        if not (is_admin_user(request.user) or is_organization_admin_user(request.user)):
+            raise PermissionDenied('Only admins or organization admins can access this resource.')
+
+    def get_queryset(self):
+        if is_admin_user(self.request.user):
+            return self.queryset
+        profile = get_organization_admin_profile(self.request.user)
+        return self.queryset.filter(user=profile.user)
+
+    def create(self, request, *args, **kwargs):
+        if not is_admin_user(request.user):
+            raise PermissionDenied('Only admins can create organization admins.')
+
+        user_id = request.data.get('user_id')
+        organization_id = request.data.get('organization_id')
+        if not user_id:
+            raise ValidationError({'user_id': 'user_id is required.'})
+        if not organization_id:
+            raise ValidationError({'organization_id': 'organization_id is required.'})
+
+        user = CustomUser.objects.filter(id=user_id).first()
+        if not user:
+            raise ValidationError({'user_id': 'Invalid user_id.'})
+        organization = Organization.objects.filter(id=organization_id, is_active=True).first()
+        if not organization:
+            raise ValidationError({'organization_id': 'Invalid organization_id.'})
+
+        user.role = UserRole.ORGANIZATION_ADMIN
+        user.save(update_fields=['role'])
+
+        profile, _ = OrganizationAdministrator.objects.update_or_create(
+            user=user,
+            defaults={'organization': organization},
+        )
+
+        serializer = self.get_serializer(profile)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=['get'], url_path='me')
+    def me(self, request):
+        profile = get_organization_admin_profile(request.user)
+        serializer = self.get_serializer(profile)
+        return Response(serializer.data)
+
 
 # ============ FAMILY MEMBERS ============
 
@@ -511,6 +617,23 @@ class HealthcareNurseViewSet(viewsets.ModelViewSet):
     search_fields = ['user__first_name', 'user__last_name', 'specializations']
     ordering_fields = ['rating', 'total_appointments', 'created_at']
     ordering = ['-rating']
+
+    def _is_org_admin(self, user):
+        return is_organization_admin_user(user)
+
+    def _get_org_admin_org(self):
+        return get_organization_admin_profile(self.request.user).organization
+
+    def get_queryset(self):
+        base_qs = HealthcareNurse.objects.select_related('user', 'organization')
+        if is_admin_user(self.request.user):
+            return base_qs
+        if self._is_org_admin(self.request.user):
+            organization = self._get_org_admin_org()
+            return base_qs.filter(organization=organization)
+        if self.request.user.get_effective_role() == UserRole.NURSE:
+            return base_qs.filter(user=self.request.user)
+        return base_qs.none()
 
     def get_serializer_class(self):
         if self.action in ['retrieve', 'me']:
@@ -604,12 +727,25 @@ class AppointmentViewSet(viewsets.ModelViewSet):
     def _is_admin(self, user):
         return is_admin_user(user)
 
+    def _is_org_admin(self, user):
+        return is_organization_admin_user(user)
+
+    def _org_scoped_queryset(self, organization):
+        return Appointment.objects.select_related(
+            'family_member', 'nurse', 'suggested_nurse', 'end_user_profile__user'
+        ).filter(
+            Q(nurse__organization=organization) | Q(suggested_nurse__organization=organization)
+        ).distinct()
+
     def get_queryset(self):
         user = self.request.user
         if self._is_admin(user):
             return Appointment.objects.select_related(
                 'family_member', 'nurse', 'suggested_nurse', 'end_user_profile__user'
             )
+        if self._is_org_admin(user):
+            org_profile = get_organization_admin_profile(user)
+            return self._org_scoped_queryset(org_profile.organization)
         if is_end_user(user):
             return Appointment.objects.select_related(
                 'family_member', 'nurse', 'suggested_nurse', 'end_user_profile__user'
@@ -708,7 +844,7 @@ class AppointmentViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'], url_path='pending-matching')
     def pending_matching(self, request):
         """Admin queue for requests awaiting nurse matching/review."""
-        if not self._is_admin(request.user):
+        if not (self._is_admin(request.user) or self._is_org_admin(request.user)):
             raise PermissionDenied('Only admins can view pending matching queue.')
         queryset = self.get_queryset().filter(
             status__in=[
@@ -723,13 +859,17 @@ class AppointmentViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], url_path='suggest-nurse')
     def suggest_nurse(self, request, pk=None):
         """Admin suggests nurse for a care request."""
-        if not self._is_admin(request.user):
+        if not (self._is_admin(request.user) or self._is_org_admin(request.user)):
             raise PermissionDenied('Only admins can suggest nurses.')
         appointment = self.get_object()
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
         selected_nurse = serializer.validated_data['suggested_nurse']
+        if self._is_org_admin(request.user):
+            org = get_organization_admin_profile(request.user).organization
+            if selected_nurse.organization_id != org.id:
+                raise ValidationError({'suggested_nurse': 'Selected nurse must belong to your organization.'})
         appointment.suggested_nurse = selected_nurse
         # Keep nurse assignment in sync so nurse portals querying by `nurse` can see the schedule immediately.
         appointment.nurse = selected_nurse
@@ -751,7 +891,7 @@ class AppointmentViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def decision(self, request, pk=None):
         """Admin final decision: approve or reject care request."""
-        if not self._is_admin(request.user):
+        if not (self._is_admin(request.user) or self._is_org_admin(request.user)):
             raise PermissionDenied('Only admins can make final decisions.')
         appointment = self.get_object()
         serializer = self.get_serializer(data=request.data)
@@ -765,6 +905,10 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             selected_nurse = serializer.validated_data.get('nurse') or appointment.suggested_nurse or appointment.nurse
             if not selected_nurse:
                 raise ValidationError({'suggested_nurse': 'Suggest a nurse before approval.'})
+            if self._is_org_admin(request.user):
+                org = get_organization_admin_profile(request.user).organization
+                if selected_nurse.organization_id != org.id:
+                    raise ValidationError({'nurse': 'Selected nurse must belong to your organization.'})
             appointment.nurse = selected_nurse
             appointment.suggested_nurse = selected_nurse
             appointment.status = AppointmentStatus.APPROVED

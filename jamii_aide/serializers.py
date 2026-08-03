@@ -5,7 +5,7 @@ from jamii_aide.models import (
     CustomUser, EndUserProfile, HealthcareNurse, FamilyMember,
     AvailabilitySlot, Appointment, HealthRecord,
     Payment, Review, AppointmentStatus, Notification, UserRole,
-    NurseEarning
+    NurseEarning, Organization, OrganizationAdministrator
 )
 
 # ============ AUTH SERIALIZERS ============
@@ -120,6 +120,31 @@ class EndUserSerializer(EndUserProfileSerializer):
 
 class EndUserUpdateSerializer(EndUserProfileUpdateSerializer):
     pass
+
+
+class OrganizationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Organization
+        fields = ['id', 'name', 'description', 'is_active', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+class OrganizationAdministratorSerializer(serializers.ModelSerializer):
+    user = UserSerializer(read_only=True)
+    user_id = serializers.UUIDField(source='user.id', read_only=True)
+    organization = OrganizationSerializer(read_only=True)
+    organization_id = serializers.PrimaryKeyRelatedField(
+        source='organization',
+        queryset=Organization.objects.filter(is_active=True),
+        write_only=True,
+    )
+
+    class Meta:
+        model = OrganizationAdministrator
+        fields = [
+            'id', 'user', 'user_id', 'organization', 'organization_id', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
 
 # ============ FAMILY MEMBER SERIALIZERS ============
 
@@ -288,11 +313,14 @@ class AvailabilitySlotSerializer(serializers.ModelSerializer):
 class HealthcareNurseSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
     professional_type_display = serializers.CharField(source='get_professional_type_display', read_only=True)
+    organization_id = serializers.UUIDField(source='organization.id', read_only=True)
+    organization_name = serializers.CharField(source='organization.name', read_only=True)
     
     class Meta:
         model = HealthcareNurse
         fields = [
             'id', 'user', 'license_number', 'license_expiry',
+            'organization_id', 'organization_name',
             'professional_type', 'professional_type_display',
             'specializations', 'languages', 'years_experience',
             'bio', 'certifications', 'service_areas',

@@ -8,6 +8,8 @@ from jamii_aide.models import (
     FamilyMember,
     HealthcareNurse,
     Notification,
+    Organization,
+    OrganizationAdministrator,
     Payment,
 )
 
@@ -66,8 +68,8 @@ class FamilyMemberAdmin(admin.ModelAdmin):
 
 @admin.register(HealthcareNurse)
 class HealthcareNurseAdmin(admin.ModelAdmin):
-    list_display = ("user", "professional_type", "status", "is_verified", "is_active", "rating")
-    list_filter = ("professional_type", "status", "is_verified", "is_active")
+    list_display = ("user", "organization", "professional_type", "status", "is_verified", "is_active", "rating")
+    list_filter = ("organization", "professional_type", "status", "is_verified", "is_active")
     search_fields = ("user__email", "user__username", "license_number", "specializations")
     readonly_fields = ("created_at", "updated_at")
 
@@ -122,3 +124,19 @@ class PaymentAdmin(admin.ModelAdmin):
         "mpesa_receipt_number",
     )
     readonly_fields = ("created_at", "updated_at", "transaction_date", "completed_at")
+
+
+@admin.register(Organization)
+class OrganizationAdmin(admin.ModelAdmin):
+    list_display = ("name", "is_active", "created_at")
+    list_filter = ("is_active", "created_at")
+    search_fields = ("name", "description")
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(OrganizationAdministrator)
+class OrganizationAdministratorAdmin(admin.ModelAdmin):
+    list_display = ("user", "organization", "created_at")
+    list_filter = ("organization", "created_at")
+    search_fields = ("user__email", "user__username", "organization__name")
+    readonly_fields = ("created_at", "updated_at")
