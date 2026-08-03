@@ -1,6 +1,6 @@
 """
 Test suite to verify USER role standardization
-- Register defaults to USER role unless organization_admin is explicitly requested
+- Register always creates USER role
 - Google auth always creates USER role  
 - /me endpoint returns USER role
 - Admin role change validates USER, NURSE, ADMIN, and ORGANIZATION_ADMIN roles
@@ -10,20 +10,12 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 from unittest.mock import patch
 
-from jamii_aide.models import (
-    CustomUser,
-    UserRole,
-    EndUserProfile,
-    HealthcareNurse,
-    NurseStatus,
-    Organization,
-    OrganizationAdministrator,
-)
+from jamii_aide.models import CustomUser, UserRole, EndUserProfile, HealthcareNurse, NurseStatus, Organization
 from django.utils import timezone
 
 
 class RegisterRoleStandardizationTests(APITestCase):
-    """Verify register endpoint role behavior."""
+    """Verify register endpoint always creates USER role"""
 
     def test_register_creates_user_role_when_no_role_provided(self):
         """Public signup without role parameter creates USER"""
@@ -91,37 +83,6 @@ class RegisterRoleStandardizationTests(APITestCase):
         
         created_user2 = CustomUser.objects.get(email="forced_nurse@example.com")
         self.assertEqual(created_user2.role, UserRole.USER)
-
-    def test_register_supports_organization_admin_with_organization_id(self):
-        organization = Organization.objects.create(name="Acme Health", code="ACME-ROLE-STD")
-
-        response = self.client.post(
-            reverse("register"),
-            {
-                "email": "orgadmin@example.com",
-                "password": "StrongPass123!",
-                "first_name": "Org",
-                "last_name": "Admin",
-                "role": "ORGANIZATION_ADMIN",
-                "organization_id": str(organization.id),
-                "job_title": "Program Manager",
-            },
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        self.assertEqual(response.data["user"]["role"], UserRole.ORGANIZATION_ADMIN)
-        self.assertEqual(response.data["user"]["account_type"], "ORGANIZATION_ADMIN")
-        self.assertTrue(response.data["user"]["is_organization_admin"])
-        self.assertTrue(response.data["user"]["is_org_admin"])
-        self.assertEqual(response.data["user"]["organization_name"], "Acme Health")
-        self.assertEqual(response.data["user"]["business_name"], "Acme Health")
-
-        created_user = CustomUser.objects.get(email="orgadmin@example.com")
-        self.assertEqual(created_user.role, UserRole.ORGANIZATION_ADMIN)
-        org_profile = OrganizationAdministrator.objects.get(user=created_user)
-        self.assertEqual(org_profile.organization_id, organization.id)
-        self.assertEqual(org_profile.job_title, "Program Manager")
 
     def test_register_only_creates_enduser_profile_for_user_role(self):
         """Verify that register creates EndUserProfile for USER role users"""

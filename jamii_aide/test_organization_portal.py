@@ -149,16 +149,6 @@ class OrganizationPortalAccessTests(APITestCase):
         self.assertIn(str(self.appointment_for_org_a.id), returned_ids)
         self.assertNotIn(str(self.appointment_for_org_b.id), returned_ids)
 
-    def test_org_admin_can_list_end_users_for_portal_user_management(self):
-        self.client.force_authenticate(user=self.org_admin_user)
-
-        response = self.client.get(reverse("end-user-list"))
-
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        payload = response.data.get("results", response.data)
-        returned_ids = {item["id"] for item in payload}
-        self.assertIn(str(self.end_user_profile.id), returned_ids)
-
     def test_admin_change_role_to_org_admin_requires_organization_id(self):
         target_user = CustomUser.objects.create_user(
             username="target_user",

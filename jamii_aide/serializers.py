@@ -39,69 +39,6 @@ class UserSerializer(serializers.ModelSerializer):
         user.save()
         return user
 
-
-class AuthUserSerializer(UserSerializer):
-    """Serializer for auth responses with role-routing compatibility fields."""
-    account_type = serializers.SerializerMethodField()
-    is_organization_admin = serializers.SerializerMethodField()
-    is_org_admin = serializers.SerializerMethodField()
-    organization_name = serializers.SerializerMethodField()
-    business_name = serializers.SerializerMethodField()
-
-    class Meta(UserSerializer.Meta):
-        fields = [
-            'id', 'email', 'phone', 'first_name', 'last_name',
-            'role', 'account_type',
-            'is_organization_admin', 'is_org_admin',
-            'organization_name', 'business_name',
-            'profile_image', 'is_verified', 'is_active', 'created_at'
-        ]
-
-    def _effective_role(self, obj):
-        return obj.get_effective_role()
-
-    def _is_org_admin(self, obj):
-        return self._effective_role(obj) == UserRole.ORGANIZATION_ADMIN
-
-    def _get_org_name(self, obj):
-        if not self._is_org_admin(obj):
-            return None
-
-        profile = getattr(obj, 'organization_admin_profile', None)
-        if profile and getattr(profile, 'organization', None):
-            return profile.organization.name
-
-        profile = OrganizationAdministrator.objects.select_related('organization').filter(
-            user=obj,
-            is_active=True,
-            organization__is_active=True,
-        ).first()
-        return profile.organization.name if profile else None
-
-    def get_role(self, obj):
-        return self._effective_role(obj)
-
-    def get_account_type(self, obj):
-        mapping = {
-            UserRole.USER: 'USER',
-            UserRole.NURSE: 'NURSE',
-            UserRole.ADMIN: 'ADMIN',
-            UserRole.ORGANIZATION_ADMIN: 'ORGANIZATION_ADMIN',
-        }
-        return mapping.get(self._effective_role(obj), str(self._effective_role(obj)).upper())
-
-    def get_is_organization_admin(self, obj):
-        return self._is_org_admin(obj)
-
-    def get_is_org_admin(self, obj):
-        return self._is_org_admin(obj)
-
-    def get_organization_name(self, obj):
-        return self._get_org_name(obj)
-
-    def get_business_name(self, obj):
-        return self._get_org_name(obj)
-
 class RegisterSerializer(serializers.Serializer):
     """Register new user"""
     email = serializers.EmailField()
@@ -109,9 +46,6 @@ class RegisterSerializer(serializers.Serializer):
     password = serializers.CharField(min_length=8, write_only=True)
     first_name = serializers.CharField()
     last_name = serializers.CharField()
-    role = serializers.CharField(required=False, allow_blank=True)
-    organization_id = serializers.UUIDField(required=False)
-    job_title = serializers.CharField(required=False, allow_blank=True)
 
     def validate_email(self, value):
         email = value.strip().lower()
@@ -127,41 +61,8 @@ class RegisterSerializer(serializers.Serializer):
             raise serializers.ValidationError('An account with this phone number already exists.')
         return phone
 
-    def validate(self, attrs):
-        requested_role = attrs.get('role')
-        normalized_role = UserRole.USER
-
-        if requested_role:
-            role_value = str(requested_role).strip().lower()
-            role_aliases = {
-                'organization_admin': UserRole.ORGANIZATION_ADMIN,
-                'organization administrator': UserRole.ORGANIZATION_ADMIN,
-                'organization-administrator': UserRole.ORGANIZATION_ADMIN,
-                'organizationadministrator': UserRole.ORGANIZATION_ADMIN,
-            }
-            normalized_role = role_aliases.get(role_value, UserRole.USER)
-
-        attrs['normalized_role'] = normalized_role
-
-        if normalized_role == UserRole.ORGANIZATION_ADMIN:
-            organization_id = attrs.get('organization_id')
-            if not organization_id:
-                raise serializers.ValidationError({'organization_id': 'organization_id is required for organization_admin role.'})
-
-            organization = Organization.objects.filter(id=organization_id, is_active=True).first()
-            if not organization:
-                raise serializers.ValidationError({'organization_id': 'Invalid organization_id provided.'})
-            attrs['organization'] = organization
-
-        return attrs
-
     def create(self, validated_data):
         password = validated_data.pop('password')
-        normalized_role = validated_data.pop('normalized_role', UserRole.USER)
-        validated_data.pop('organization_id', None)
-        validated_data.pop('organization', None)
-        validated_data.pop('job_title', None)
-        validated_data.pop('role', None)
         phone = validated_data.get('phone')
         if phone == '':
             validated_data['phone'] = None
@@ -170,7 +71,7 @@ class RegisterSerializer(serializers.Serializer):
         while CustomUser.objects.filter(username=username).exists():
             username = f"{base_username}_{uuid4().hex[:6]}"
         validated_data['username'] = username
-        validated_data['role'] = normalized_role
+        validated_data['role'] = UserRole.USER
         user = CustomUser.objects.create(**validated_data)
         user.set_password(password)
         user.save()
@@ -197,30 +98,8 @@ class LoginSerializer(serializers.Serializer):
 
 # ============ END USER PROFILE SERIALIZERS ============
 
-class EndUserNestedUserSerializer(serializers.ModelSerializer):
-    """Nested user shape for end-user list views expected by admin frontend."""
-    role = serializers.SerializerMethodField()
-
-    class Meta:
-        model = CustomUser
-        fields = [
-            'id', 'email', 'first_name', 'last_name',
-            'role', 'is_active', 'created_at'
-        ]
-        read_only_fields = fields
-
-    def get_role(self, obj):
-        role = obj.get_effective_role()
-        mapping = {
-            UserRole.USER: 'USER',
-            UserRole.NURSE: 'NURSE',
-            UserRole.ADMIN: 'ADMIN',
-            UserRole.ORGANIZATION_ADMIN: 'ORGANIZATION_ADMIN',
-        }
-        return mapping.get(role, str(role).upper())
-
 class EndUserProfileSerializer(serializers.ModelSerializer):
-    user = EndUserNestedUserSerializer(read_only=True)
+    user = UserSerializer(read_only=True)
     user_id = serializers.UUIDField(source='user.id', read_only=True)
     
     class Meta:
@@ -550,14 +429,13 @@ class AppointmentCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Appointment
         fields = [
-            'id', 'family_member', 'appointment_date',
+            'family_member', 'appointment_date',
             'start_time', 'end_time', 'reason', 'service_type',
             'shift_type', 'evaluation_type', 'visit_address',
             'visit_city', 'notes', 'additional_notes',
             'admission_clause_accepted', 'admission_support_in_subscription',
             'admission_questionnaire'
         ]
-        read_only_fields = ['id']
 
     @staticmethod
     def _normalize_choice_value(value, enum_cls, extra_aliases=None):
