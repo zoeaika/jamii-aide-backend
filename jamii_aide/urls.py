@@ -5,6 +5,7 @@ from jamii_aide.views import (
     AdminDashboardView,
     LoginPageView,
     NurseDashboardView,
+    OrganizationAdminDashboardView,
     RoleRedirectView,
     SignupView,
     UserDashboardView,
@@ -17,4 +18,5 @@ urlpatterns = [
     path('dashboard/user', UserDashboardView.as_view(), name='dashboard-user'),
     path('dashboard/nurse', NurseDashboardView.as_view(), name='dashboard-nurse'),
     path('dashboard/admin', AdminDashboardView.as_view(), name='dashboard-admin'),
+    path('dashboard/organization-admin', OrganizationAdminDashboardView.as_view(), name='dashboard-organization-admin'),
 ]

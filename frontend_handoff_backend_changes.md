@@ -11,12 +11,13 @@ Roles are now:
 - `user`
 - `nurse`
 - `admin`
+- `organization_admin`
 
 Important rules:
 
-- Public signup never chooses a role.
-- `POST /api/auth/register/` always creates a `user`.
-- Only admins should assign `nurse` or `admin`.
+- Public signup defaults to `user`.
+- `POST /api/auth/register/` supports `organization_admin` when a valid `organization_id` is provided.
+- Public signup ignores elevated role requests such as `admin` and `nurse`.
 - Google sign-in also creates a `user` by default.
 
 ## Frontend role and ID contract (must follow)
@@ -26,6 +27,7 @@ Use only these role values:
 - `user`
 - `nurse`
 - `admin`
+- `organization_admin`
 
 For end-user list payloads:
 
@@ -36,7 +38,8 @@ When calling admin role change:
 
 - Endpoint: `POST /api/admin/users/{id}/change-role/`
 - Prefer `{id} = user_id` from end-user payload.
-- Send body: `{"role": "user" | "nurse" | "admin"}`
+- Send body: `{"role": "user" | "nurse" | "admin" | "organization_admin"}`
+- Include `organization_id` when setting `role=organization_admin`.
 
 ## Auth endpoints
 
@@ -96,6 +99,20 @@ Practical notes:
 }
 ```
 
+Organization admin register request:
+
+```json
+{
+  "email": "org-admin@example.com",
+  "password": "StrongPass123!",
+  "first_name": "Jane",
+  "last_name": "Doe",
+  "role": "ORGANIZATION_ADMIN",
+  "organization_id": "uuid",
+  "job_title": "Operations Lead"
+}
+```
+
 ## Login request
 
 ```json
@@ -134,6 +151,7 @@ If you are building a separate frontend app, match the backend role redirects li
 - `user` -> `/dashboard/user`
 - `nurse` -> `/dashboard/nurse`
 - `admin` -> `/dashboard/admin`
+- `organization_admin` -> `/dashboard/organization-admin`
 
 If you use the Django-rendered auth pages directly, these routes already exist:
 

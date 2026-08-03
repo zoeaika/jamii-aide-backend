@@ -274,11 +274,13 @@ EMAIL_PORT = config('EMAIL_PORT', default=25, cast=int)
 EMAIL_USE_TLS = env_bool('EMAIL_USE_TLS', False)
 EMAIL_HOST_USER = config('EMAIL_HOST_USER', default='')
 EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD', default='')
+EMAIL_TIMEOUT = config('EMAIL_TIMEOUT', default=20, cast=int)
 DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default='notifications@jamiiaide.com')
 
 # Celery Configuration
 IS_TESTING = 'test' in sys.argv
 CELERY_TASK_ALWAYS_EAGER = env_bool('CELERY_TASK_ALWAYS_EAGER', IS_TESTING or DEBUG)
+CELERY_INLINE_FALLBACK = env_bool('CELERY_INLINE_FALLBACK', False)
 
 if CELERY_TASK_ALWAYS_EAGER:
     CELERY_BROKER_URL = 'memory://'
@@ -288,6 +290,14 @@ else:
     CELERY_RESULT_BACKEND = config('CELERY_RESULT_BACKEND', default='redis://localhost:6379/0')
 
 CELERY_TASK_EAGER_PROPAGATES = env_bool('CELERY_TASK_EAGER_PROPAGATES', False)
+CELERY_BROKER_CONNECTION_RETRY = env_bool('CELERY_BROKER_CONNECTION_RETRY', False)
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = env_bool('CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP', False)
+CELERY_BROKER_CONNECTION_TIMEOUT = config('CELERY_BROKER_CONNECTION_TIMEOUT', default=2, cast=int)
+CELERY_BROKER_TRANSPORT_OPTIONS = {
+    'socket_connect_timeout': config('CELERY_SOCKET_CONNECT_TIMEOUT', default=2, cast=int),
+    'socket_timeout': config('CELERY_SOCKET_TIMEOUT', default=2, cast=int),
+    'retry_on_timeout': env_bool('CELERY_RETRY_ON_TIMEOUT', False),
+}
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'

@@ -10,6 +10,7 @@ class UserRole(models.TextChoices):
     USER = "user", "User"
     NURSE = "nurse", "Nurse"
     ADMIN = "admin", "Admin"
+    ORGANIZATION_ADMIN = "organization_admin", "Organization Administrator"
 
 
 class CustomUserManager(UserManager):
@@ -152,6 +153,60 @@ class EndUserProfile(models.Model):
     def __str__(self):
         return f"{self.user.get_full_name()} - {self.current_country}"
 
+
+class Organization(models.Model):
+    """Healthcare organization owning and managing nurses."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=255, unique=True)
+    code = models.CharField(max_length=50, unique=True)
+    description = models.TextField(blank=True, null=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'organizations'
+        ordering = ['name']
+        indexes = [
+            models.Index(fields=['name']),
+            models.Index(fields=['code']),
+            models.Index(fields=['is_active']),
+        ]
+
+    def __str__(self):
+        return self.name
+
+
+class OrganizationAdministrator(models.Model):
+    """Organization-scoped admin profile."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.OneToOneField(
+        CustomUser,
+        on_delete=models.CASCADE,
+        related_name='organization_admin_profile'
+    )
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name='administrators'
+    )
+    job_title = models.CharField(max_length=120, blank=True, null=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'organization_administrators'
+        verbose_name = 'Organization Administrator'
+        verbose_name_plural = 'Organization Administrators'
+        indexes = [
+            models.Index(fields=['organization']),
+            models.Index(fields=['is_active']),
+        ]
+
+    def __str__(self):
+        return f"{self.user.get_full_name()} - {self.organization.name}"
+
 # ============ HEALTHCARE NURSE ============
 
 class HealthcareNurse(models.Model):
@@ -161,6 +216,13 @@ class HealthcareNurse(models.Model):
         CustomUser,
         on_delete=models.CASCADE,
         related_name='healthcare_nurse'
+    )
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.SET_NULL,
+        related_name='nurses',
+        blank=True,
+        null=True,
     )
     license_number = models.CharField(max_length=50, unique=True)
     license_expiry = models.DateField()
@@ -204,6 +266,7 @@ class HealthcareNurse(models.Model):
             models.Index(fields=['professional_type']),
             models.Index(fields=['is_verified']),
             models.Index(fields=['rating']),
+            models.Index(fields=['organization']),
         ]
 
     def __str__(self):
