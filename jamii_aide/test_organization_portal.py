@@ -29,8 +29,8 @@ class OrganizationPortalAccessTests(APITestCase):
             is_staff=True,
         )
 
-        self.org_a = Organization.objects.create(name="Org A", code="ORGA")
-        self.org_b = Organization.objects.create(name="Org B", code="ORGB")
+        self.org_a = Organization.objects.create(name="Org A")
+        self.org_b = Organization.objects.create(name="Org B")
 
         self.org_admin_user = CustomUser.objects.create_user(
             username="org_admin",
@@ -41,8 +41,6 @@ class OrganizationPortalAccessTests(APITestCase):
         OrganizationAdministrator.objects.create(
             user=self.org_admin_user,
             organization=self.org_a,
-            job_title="Operations Manager",
-            is_active=True,
         )
 
         self.nurse_a_user = CustomUser.objects.create_user(

@@ -25,7 +25,7 @@ from jamii_aide.models import (
     HealthcareNurse, FamilyMember,
     AvailabilitySlot, Appointment, HealthRecord,
     Payment, Review, AppointmentStatus, PaymentStatus, UserRole,
-    NurseStatus,
+    NurseStatus, ServiceType, ProfessionalType,
     Notification, NotificationEventType, NurseEarning
 )
 from jamii_aide.serializers import (
@@ -49,6 +49,7 @@ from jamii_aide.serializers import (
 from jamii_aide.google_serializers import GoogleAuthSerializer, GoogleLoginResponseSerializer
 from jamii_aide.forms import SignupForm, LoginForm
 
+from jamii_aide.mixins import ApiDebugMixin
 from jamii_aide.tasks import send_email_task, send_payment_receipt_task
 
 logger = logging.getLogger('jamii_aide.appointments')
@@ -146,7 +147,6 @@ def get_organization_admin_profile(user):
         raise PermissionDenied('Only organization administrators can access this resource.')
     profile = OrganizationAdministrator.objects.select_related('organization').filter(
         user=user,
-        is_active=True,
         organization__is_active=True,
     ).first()
     if not profile:
@@ -443,13 +443,13 @@ class EndUserViewSet(EndUserProfileViewSet):
         return EndUserSerializer
 
 
-class OrganizationViewSet(viewsets.ModelViewSet):
+class OrganizationViewSet(ApiDebugMixin, viewsets.ModelViewSet):
     """System-admin management of organizations."""
-    queryset = Organization.objects.all().order_by('name')
+    queryset = Organization.objects.all().order_by('name', 'id')
     serializer_class = OrganizationSerializer
     permission_classes = [permissions.IsAuthenticated]
     filter_backends = [filters.SearchFilter]
-    search_fields = ['name', 'code']
+    search_fields = ['name']
 
     def check_permissions(self, request):
         super().check_permissions(request)
@@ -477,9 +477,9 @@ class OrganizationAdministratorViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
 
 
-class AdminUserViewSet(viewsets.ModelViewSet):
+class AdminUserViewSet(ApiDebugMixin, viewsets.ModelViewSet):
     """Admin management of users (role assignment, etc.)"""
-    queryset = CustomUser.objects.all().order_by('-created_at')
+    queryset = CustomUser.objects.all().order_by('-created_at', '-id')
     serializer_class = UserSerializer
     permission_classes = [permissions.IsAuthenticated]
     filter_backends = [filters.SearchFilter]
@@ -543,7 +543,6 @@ class AdminUserViewSet(viewsets.ModelViewSet):
                 user=user,
                 defaults={
                     'organization': organization,
-                    'is_active': True,
                 }
             )
 
@@ -551,13 +550,15 @@ class AdminUserViewSet(viewsets.ModelViewSet):
 
 # ============ FAMILY MEMBERS ============
 
-class FamilyMemberViewSet(viewsets.ModelViewSet):
+class FamilyMemberViewSet(ApiDebugMixin, viewsets.ModelViewSet):
     """Family member management"""
     serializer_class = FamilyMemberSerializer
     permission_classes = [permissions.IsAuthenticated]
-    filter_backends = [DjangoFilterBackend, filters.SearchFilter]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['is_active']
     search_fields = ['first_name', 'last_name']
+    ordering_fields = ['created_at', 'first_name', 'last_name']
+    ordering = ['-created_at', '-id']
 
     def get_queryset(self):
         end_user_profile = get_end_user_profile(self.request.user)
@@ -600,7 +601,7 @@ class FamilyMemberViewSet(viewsets.ModelViewSet):
 
 # ============ HEALTHCARE NURSES ============
 
-class HealthcareNurseViewSet(viewsets.ModelViewSet):
+class HealthcareNurseViewSet(ApiDebugMixin, viewsets.ModelViewSet):
     """Healthcare nurse profiles"""
     queryset = HealthcareNurse.objects.all()
     serializer_class = HealthcareNurseSerializer
@@ -609,7 +610,16 @@ class HealthcareNurseViewSet(viewsets.ModelViewSet):
     filterset_fields = ['status', 'professional_type', 'is_verified', 'is_active']
     search_fields = ['user__first_name', 'user__last_name', 'specializations']
     ordering_fields = ['rating', 'total_appointments', 'created_at']
-    ordering = ['-rating']
+    ordering = ['-rating', '-created_at', '-id']
+
+    def get_queryset(self):
+        queryset = HealthcareNurse.objects.select_related('user', 'organization')
+        if is_admin_user(self.request.user):
+            return queryset
+        if is_organization_admin_user(self.request.user):
+            org_admin = get_organization_admin_profile(self.request.user)
+            return queryset.filter(organization=org_admin.organization)
+        return queryset.filter(is_active=True, status=NurseStatus.APPROVED)
 
     def get_queryset(self):
         queryset = HealthcareNurse.objects.select_related('user', 'organization')
@@ -727,7 +737,7 @@ class AvailabilitySlotViewSet(viewsets.ModelViewSet):
 
 # ============ APPOINTMENTS ============
 
-class AppointmentViewSet(viewsets.ModelViewSet):
+class AppointmentViewSet(ApiDebugMixin, viewsets.ModelViewSet):
     """Appointment management"""
     queryset = Appointment.objects.all()
     serializer_class = AppointmentSerializer
@@ -735,7 +745,7 @@ class AppointmentViewSet(viewsets.ModelViewSet):
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
     filterset_fields = ['status', 'nurse', 'family_member', 'appointment_date']
     ordering_fields = ['appointment_date', 'created_at']
-    ordering = ['-appointment_date']
+    ordering = ['-appointment_date', '-created_at', '-id']
 
     def get_serializer_class(self):
         if self.action == 'create':
@@ -791,6 +801,83 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             ).filter(Q(nurse=nurse) | Q(suggested_nurse=nurse)).distinct()
         return Appointment.objects.none()
 
+    def _get_service_type_preferences(self, service_type):
+        preferences = {
+            ServiceType.WELLNESS_VISIT: [ProfessionalType.CAREGIVER_NURSE, ProfessionalType.PHYSIOTHERAPIST],
+            ServiceType.CARE_VISIT: [ProfessionalType.CAREGIVER_NURSE, ProfessionalType.PALLIATIVE_CARE_NURSE],
+            ServiceType.CHRONIC_CONDITION_VISIT: [ProfessionalType.PALLIATIVE_CARE_NURSE, ProfessionalType.CAREGIVER_NURSE],
+            ServiceType.DAILY_CARE: [ProfessionalType.CAREGIVER_NURSE],
+            ServiceType.LIVE_IN_CARE: [ProfessionalType.CAREGIVER_NURSE, ProfessionalType.PALLIATIVE_CARE_NURSE],
+            ServiceType.EMERGENCY_ACCOMPANIMENT: [ProfessionalType.CAREGIVER_NURSE, ProfessionalType.PALLIATIVE_CARE_NURSE],
+        }
+        return preferences.get(service_type, [ProfessionalType.CAREGIVER_NURSE])
+
+    def _is_available_for_time(self, nurse, appointment):
+        day_of_week = appointment.appointment_date.weekday()
+        slots = nurse.availability_slots.filter(is_available=True, day_of_week=day_of_week)
+        for slot in slots:
+            if slot.start_time <= appointment.start_time and slot.end_time >= appointment.end_time:
+                return True
+        return False
+
+    def _has_conflicting_assignment(self, nurse, appointment):
+        overlapping_statuses = [
+            AppointmentStatus.APPROVED,
+            AppointmentStatus.CONFIRMED,
+            AppointmentStatus.PENDING,
+            AppointmentStatus.NURSE_SUGGESTED,
+            AppointmentStatus.UNDER_REVIEW,
+        ]
+        return Appointment.objects.filter(
+            nurse=nurse,
+            appointment_date=appointment.appointment_date,
+            status__in=overlapping_statuses,
+        ).filter(
+            Q(start_time__lt=appointment.end_time, end_time__gt=appointment.start_time)
+        ).exists()
+
+    def _select_best_nurse(self, appointment):
+        preferred_types = self._get_service_type_preferences(appointment.service_type)
+        visit_city = (appointment.visit_city or '').strip().lower()
+        visit_city_tokens = {visit_city} | {token for token in visit_city.split() if token}
+
+        primary_candidates = []
+        queryset = HealthcareNurse.objects.filter(
+            status=NurseStatus.APPROVED,
+            is_active=True,
+            is_verified=True,
+        ).select_related('user')
+
+        for nurse in queryset:
+            if nurse.professional_type != preferred_types[0]:
+                continue
+            if not self._is_available_for_time(nurse, appointment):
+                continue
+            if self._has_conflicting_assignment(nurse, appointment):
+                continue
+
+            matching_service_area = False
+            for area in nurse.service_areas or []:
+                area_value = str(area).strip().lower()
+                if not area_value:
+                    continue
+                if area_value in visit_city_tokens or visit_city in area_value or area_value in visit_city:
+                    matching_service_area = True
+                    break
+
+            score = 100
+            if matching_service_area:
+                score += 30
+            score += int(nurse.rating * 10)
+            score -= nurse.total_appointments * 2
+            primary_candidates.append((score, nurse))
+
+        if primary_candidates:
+            primary_candidates.sort(key=lambda item: (-item[0], item[1].rating, item[1].total_appointments, item[1].created_at))
+            return primary_candidates[0][1]
+
+        return None
+
     def create(self, request, *args, **kwargs):
         logger.info(
             'Appointment create attempt user_id=%s role=%s payload_keys=%s',
@@ -807,17 +894,18 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             )
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        self.perform_create(serializer)
+        appointment = self.perform_create(serializer)
         headers = self.get_success_headers(serializer.data)
-        created_id = serializer.instance.id if serializer.instance else None
+        created_id = appointment.id if appointment else None
         logger.info(
             'Appointment created id=%s user_id=%s family_member=%s status=%s',
             created_id,
             getattr(request.user, 'id', None),
             serializer.validated_data.get('family_member').id if serializer.validated_data.get('family_member') else None,
-            serializer.instance.status if serializer.instance else None,
+            appointment.status if appointment else None,
         )
-        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+        payload = AppointmentSerializer(appointment).data if appointment else serializer.data
+        return Response(payload, status=status.HTTP_201_CREATED, headers=headers)
 
     def perform_create(self, serializer):
         if not is_end_user(self.request.user):
@@ -836,12 +924,36 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             decision_at=None,
             nurse=None
         )
-        logger.info(
-            'Appointment persisted id=%s end_user_profile=%s status=%s',
-            appointment.id,
-            end_user_profile.id,
-            appointment.status,
-        )
+
+        auto_assigned_nurse = self._select_best_nurse(appointment)
+        if auto_assigned_nurse:
+            appointment.nurse = auto_assigned_nurse
+            appointment.suggested_nurse = auto_assigned_nurse
+            appointment.status = AppointmentStatus.APPROVED
+            appointment.rejection_reason = None
+            appointment.save(update_fields=['nurse', 'suggested_nurse', 'status', 'rejection_reason', 'updated_at'])
+            create_notification(
+                recipient=appointment.end_user_profile.user,
+                appointment=appointment,
+                event_type=NotificationEventType.REQUEST_APPROVED,
+                title='Care Request Approved',
+                message='Your care request has been automatically matched with a suitable nurse.',
+            )
+            logger.info(
+                'Appointment auto-assigned id=%s nurse=%s service_type=%s city=%s',
+                appointment.id,
+                auto_assigned_nurse.id,
+                appointment.service_type,
+                appointment.visit_city,
+            )
+        else:
+            logger.info(
+                'Appointment kept pending id=%s service_type=%s city=%s',
+                appointment.id,
+                appointment.service_type,
+                appointment.visit_city,
+            )
+
         admin_users = CustomUser.objects.filter(
             Q(role=UserRole.ADMIN) | Q(is_staff=True),
             is_active=True,
@@ -854,6 +966,8 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                 title='New Care Request Submitted',
                 message='A new care request has been submitted and is awaiting admin review.',
             )
+
+        return appointment
 
     def perform_update(self, serializer):
         appointment = self.get_object()
@@ -1218,14 +1332,14 @@ class PaymentViewSet(viewsets.ModelViewSet):
         return Response(PaymentSerializer(payment).data)
 
 
-class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
+class NotificationViewSet(ApiDebugMixin, viewsets.ReadOnlyModelViewSet):
     """User notification feed"""
     serializer_class = NotificationSerializer
     permission_classes = [permissions.IsAuthenticated]
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
     filterset_fields = ['is_read', 'event_type']
     ordering_fields = ['created_at']
-    ordering = ['-created_at']
+    ordering = ['-created_at', '-id']
 
     def get_queryset(self):
         return Notification.objects.filter(recipient=self.request.user)

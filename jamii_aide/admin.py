@@ -7,9 +7,9 @@ from jamii_aide.models import (
     EndUserProfile,
     FamilyMember,
     HealthcareNurse,
+    Notification,
     Organization,
     OrganizationAdministrator,
-    Notification,
     Payment,
 )
 
@@ -69,23 +69,23 @@ class FamilyMemberAdmin(admin.ModelAdmin):
 @admin.register(HealthcareNurse)
 class HealthcareNurseAdmin(admin.ModelAdmin):
     list_display = ("user", "organization", "professional_type", "status", "is_verified", "is_active", "rating")
-    list_filter = ("professional_type", "status", "is_verified", "is_active")
+    list_filter = ("organization", "professional_type", "status", "is_verified", "is_active")
     search_fields = ("user__email", "user__username", "license_number", "specializations")
     readonly_fields = ("created_at", "updated_at")
 
 
 @admin.register(Organization)
 class OrganizationAdmin(admin.ModelAdmin):
-    list_display = ("name", "code", "is_active", "created_at")
+    list_display = ("name", "is_active", "created_at")
     list_filter = ("is_active", "created_at")
-    search_fields = ("name", "code")
+    search_fields = ("name", "description")
     readonly_fields = ("created_at", "updated_at")
 
 
 @admin.register(OrganizationAdministrator)
 class OrganizationAdministratorAdmin(admin.ModelAdmin):
-    list_display = ("user", "organization", "job_title", "is_active", "created_at")
-    list_filter = ("is_active", "organization", "created_at")
+    list_display = ("user", "organization", "created_at")
+    list_filter = ("organization", "created_at")
     search_fields = ("user__email", "user__username", "organization__name")
     readonly_fields = ("created_at", "updated_at")
 

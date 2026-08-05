@@ -246,17 +246,67 @@ sudo journalctl -u jamii-aide -n 200 --no-pager
 curl -I https://<your-domain>/api/
 ```
 
-## 13. Updating the Backend
+## 13. Updating the Backend (Droplet)
+
+Use this workflow each time you deploy backend changes.
+
+### A) Quick Update Commands
+
+```bash
+# 1) Go to app directory
+cd /opt/jamii-aide-backend
+
+# 2) Save current commit (for rollback)
+PREV_COMMIT=$(git rev-parse HEAD)
+echo "Previous commit: $PREV_COMMIT"
+
+# 3) Pull latest backend code (replace production with your live branch if needed)
+sudo -u www-data -H git fetch origin
+sudo -u www-data -H git checkout production
+sudo -u www-data -H git pull origin production
+
+# 4) Install/update dependencies
+sudo -u www-data -H /opt/jamii-aide-backend/venv/bin/pip install -r /opt/jamii-aide-backend/requirements_django.txt
+
+# 5) Run migrations and collect static files
+sudo -u www-data -H /opt/jamii-aide-backend/venv/bin/python /opt/jamii-aide-backend/manage.py migrate
+sudo -u www-data -H /opt/jamii-aide-backend/venv/bin/python /opt/jamii-aide-backend/manage.py collectstatic --noinput
+
+# 6) Restart service
+sudo systemctl restart jamii-aide
+
+# 7) Verify service and recent logs
+sudo systemctl status jamii-aide --no-pager
+sudo journalctl -u jamii-aide -n 100 --no-pager
+curl -I https://<your-domain>/api/
+```
+
+### B) If Environment Variables Changed
+
+After editing `/opt/jamii-aide-backend/.env`, always restart Gunicorn:
+
+```bash
+sudo systemctl restart jamii-aide
+sudo systemctl status jamii-aide --no-pager
+```
+
+### C) Rollback Commands (If Release Fails)
+
+If the new deploy breaks, rollback to the previous commit captured in `PREV_COMMIT`:
 
 ```bash
 cd /opt/jamii-aide-backend
-git pull origin production
-source venv/bin/activate
-pip install -r requirements_django.txt
-python manage.py migrate
-python manage.py collectstatic --noinput
+sudo -u www-data -H git reset --hard "$PREV_COMMIT"
+sudo -u www-data -H /opt/jamii-aide-backend/venv/bin/pip install -r /opt/jamii-aide-backend/requirements_django.txt
+sudo -u www-data -H /opt/jamii-aide-backend/venv/bin/python /opt/jamii-aide-backend/manage.py migrate
 sudo systemctl restart jamii-aide
+sudo systemctl status jamii-aide --no-pager
 ```
+
+Note:
+
+- If a migration is not backward compatible, restore from database backup before rollback.
+- Always take a DB backup before major schema changes.
 
 ## 14. Common Issues
 

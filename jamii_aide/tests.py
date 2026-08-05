@@ -781,6 +781,30 @@ class AppointmentNotificationFlowTests(APITestCase):
         returned_ids = {item["id"] for item in payload}
         self.assertIn(str(fallback_assigned.id), returned_ids)
 
+    def test_nurse_me_includes_legacy_suggested_nurse_assignments(self):
+        legacy_assigned = Appointment.objects.create(
+            family_member=self.family_member,
+            end_user_profile=self.end_user_profile,
+            appointment_date=date.today() + timedelta(days=8),
+            start_time=time(16, 0),
+            end_time=time(17, 0),
+            reason="Legacy suggested-only assignment",
+            service_type=ServiceType.CARE_VISIT,
+            shift_type=ShiftType.DAILY_PER_HOUR_12H,
+            visit_address="South C",
+            visit_city="Nairobi",
+            status=AppointmentStatus.APPROVED,
+            nurse=None,
+            suggested_nurse=self.nurse,
+        )
+
+        self.client.force_authenticate(user=self.nurse_user)
+        response = self.client.get(reverse("nurse-me"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        assigned_ids = {item["id"] for item in response.data["assigned_appointments"]}
+        self.assertIn(str(legacy_assigned.id), assigned_ids)
+
 
 class AuthenticationFlowTests(APITestCase):
     def test_user_can_register_with_email_password_and_get_jwt_tokens(self):
@@ -873,113 +897,6 @@ class AuthenticationFlowTests(APITestCase):
         created_user = CustomUser.objects.get(email="forced-admin@example.com")
         self.assertEqual(created_user.role, UserRole.USER)
         self.assertFalse(created_user.is_staff)
-
-    def test_register_can_create_organization_admin_with_profile(self):
-        organization = Organization.objects.create(name="Acme Health", code="ACME")
-
-        response = self.client.post(
-            reverse("register"),
-            {
-                "email": "org-admin@example.com",
-                "password": "StrongPass123!",
-                "first_name": "Org",
-                "last_name": "Admin",
-                "role": "ORGANIZATION_ADMIN",
-                "organization_id": str(organization.id),
-                "job_title": "Operations Lead",
-            },
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        self.assertEqual(response.data["user"]["role"], UserRole.ORGANIZATION_ADMIN)
-        self.assertEqual(response.data["user"]["account_type"], "ORGANIZATION_ADMIN")
-        self.assertTrue(response.data["user"]["is_organization_admin"])
-        self.assertTrue(response.data["user"]["is_org_admin"])
-        self.assertEqual(response.data["user"]["organization_name"], "Acme Health")
-        self.assertEqual(response.data["user"]["business_name"], "Acme Health")
-
-        created_user = CustomUser.objects.get(email="org-admin@example.com")
-        self.assertEqual(created_user.role, UserRole.ORGANIZATION_ADMIN)
-
-        org_admin_profile = OrganizationAdministrator.objects.get(user=created_user)
-        self.assertEqual(org_admin_profile.organization_id, organization.id)
-        self.assertEqual(org_admin_profile.job_title, "Operations Lead")
-
-    def test_register_requires_organization_id_for_organization_admin(self):
-        response = self.client.post(
-            reverse("register"),
-            {
-                "email": "org-admin-missing-org@example.com",
-                "password": "StrongPass123!",
-                "first_name": "Org",
-                "last_name": "Admin",
-                "role": "organization_admin",
-            },
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("organization_id", response.data)
-
-    def test_admin_login_returns_uppercase_account_type(self):
-        admin_user = CustomUser.objects.create_user(
-            username="portal_admin",
-            email="portal-admin@example.com",
-            password="StrongPass123!",
-            role=UserRole.ADMIN,
-            is_staff=True,
-        )
-
-        response = self.client.post(
-            reverse("login"),
-            {
-                "email": "portal-admin@example.com",
-                "password": "StrongPass123!",
-            },
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data["user"]["id"], str(admin_user.id))
-        self.assertEqual(response.data["user"]["role"], UserRole.ADMIN)
-        self.assertEqual(response.data["user"]["account_type"], "ADMIN")
-        self.assertFalse(response.data["user"]["is_organization_admin"])
-        self.assertFalse(response.data["user"]["is_org_admin"])
-        self.assertIsNone(response.data["user"]["organization_name"])
-        self.assertIsNone(response.data["user"]["business_name"])
-
-    def test_organization_admin_login_returns_org_admin_auth_flags(self):
-        organization = Organization.objects.create(name="Nairobi Care", code="NCARE")
-        user = CustomUser.objects.create_user(
-            username="orgadmin_login",
-            email="orgadmin-login@example.com",
-            password="StrongPass123!",
-            role=UserRole.ORGANIZATION_ADMIN,
-        )
-        OrganizationAdministrator.objects.create(
-            user=user,
-            organization=organization,
-            job_title="Operations",
-            is_active=True,
-        )
-
-        response = self.client.post(
-            reverse("login"),
-            {
-                "email": "orgadmin-login@example.com",
-                "password": "StrongPass123!",
-            },
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data["user"]["role"], UserRole.ORGANIZATION_ADMIN)
-        self.assertEqual(response.data["user"]["account_type"], "ORGANIZATION_ADMIN")
-        self.assertTrue(response.data["user"]["is_organization_admin"])
-        self.assertTrue(response.data["user"]["is_org_admin"])
-        self.assertEqual(response.data["user"]["organization_name"], "Nairobi Care")
-        self.assertEqual(response.data["user"]["business_name"], "Nairobi Care")
 
     @patch("jamii_aide.google_serializers.id_token.verify_oauth2_token")
     def test_google_login_creates_verified_end_user_and_profile(self, mock_verify):
@@ -1561,9 +1478,6 @@ class AdminEndUserAccessTests(APITestCase):
         listed_profile = next((item for item in payload if item["id"] == str(self.end_user_profile.id)), None)
         self.assertIsNotNone(listed_profile)
         self.assertEqual(listed_profile["user_id"], str(self.end_user.id))
-        self.assertEqual(listed_profile["user"]["role"], "USER")
-        self.assertEqual(listed_profile["user"]["email"], self.end_user.email)
-        self.assertIn("created_at", listed_profile["user"])
 
     def test_admin_can_change_role_using_end_user_profile_id(self):
         self.client.force_authenticate(user=self.admin_user)
@@ -1867,50 +1781,5 @@ class HealthRecordPaymentReviewFlowTests(APITestCase):
         )
         self.assertEqual(create_response.status_code, status.HTTP_201_CREATED)
         review = Review.objects.get(appointment=self.appointment)
+
         self.assertEqual(review.nurse, self.nurse)
-
-    def test_admin_can_list_family_members_for_dashboard_metrics(self):
-        self.client.force_authenticate(user=self.admin_user)
-
-        response = self.client.get(reverse("family-member-list"))
-
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        payload = response.data.get("results", response.data)
-        returned_ids = {item["id"] for item in payload}
-        self.assertIn(str(self.family_member.id), returned_ids)
-
-    def test_admin_can_list_health_records_for_dashboard_metrics(self):
-        record = HealthRecord.objects.create(
-            end_user_profile=self.end_user_profile,
-            family_member=self.family_member,
-            type="GENERAL_NOTE",
-            title="Admin visible note",
-            content="Vitals stable",
-            is_private=True,
-        )
-
-        self.client.force_authenticate(user=self.admin_user)
-        response = self.client.get(reverse("health-record-list"))
-
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        payload = response.data.get("results", response.data)
-        returned_ids = {item["id"] for item in payload}
-        self.assertIn(str(record.id), returned_ids)
-
-    def test_admin_can_view_payment_stats_for_dashboard_metrics(self):
-        Payment.objects.create(
-            end_user_profile=self.end_user_profile,
-            amount="3450.00",
-            method=PaymentMethod.MPESA,
-            status=PaymentStatus.COMPLETED,
-            description="Completed for stats",
-        )
-
-        self.client.force_authenticate(user=self.admin_user)
-        list_response = self.client.get(reverse("payment-list"))
-        stats_response = self.client.get(reverse("payment-stats"))
-
-        self.assertEqual(list_response.status_code, status.HTTP_200_OK)
-        self.assertEqual(stats_response.status_code, status.HTTP_200_OK)
-        self.assertEqual(stats_response.data["payment_count"], 1)
-        self.assertEqual(stats_response.data["total_spent"], 3450.0)

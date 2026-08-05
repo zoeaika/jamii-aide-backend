@@ -23,8 +23,8 @@ from jamii_aide.views import (
 # Create router and register viewsets
 router = DefaultRouter()
 router.register(r'admin/users', AdminUserViewSet, basename='admin-user')
-router.register(r'admin/organizations', OrganizationViewSet, basename='organization')
-router.register(r'admin/organization-admins', OrganizationAdministratorViewSet, basename='organization-admin')
+router.register(r'admin/organizations', OrganizationViewSet, basename='admin-organization')
+router.register(r'admin/organization-admins', OrganizationAdministratorViewSet, basename='admin-organization-admin')
 router.register(r'end-users', EndUserViewSet, basename='end-user')
 router.register(r'family-members', FamilyMemberViewSet, basename='family-member')
 router.register(r'nurses', HealthcareNurseViewSet, basename='nurse')

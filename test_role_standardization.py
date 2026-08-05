@@ -359,7 +359,7 @@ class AdminRoleChangeValidationTests(APITestCase):
             self.assertEqual(response.data["role"], valid_role)
 
         # organization_admin requires organization_id
-        organization = Organization.objects.create(name="Acme Health", code="ACME")
+        organization = Organization.objects.create(name="Acme Health")
         org_response = self.client.post(
             reverse("admin-user-change-role", kwargs={"pk": self.target_user.id}),
             {"role": UserRole.ORGANIZATION_ADMIN, "organization_id": str(organization.id)},

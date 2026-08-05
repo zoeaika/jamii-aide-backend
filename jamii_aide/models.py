@@ -10,7 +10,7 @@ class UserRole(models.TextChoices):
     USER = "user", "User"
     NURSE = "nurse", "Nurse"
     ADMIN = "admin", "Admin"
-    ORGANIZATION_ADMIN = "organization_admin", "Organization Administrator"
+    ORGANIZATION_ADMIN = "organization_admin", "Organization Admin"
 
 
 class CustomUserManager(UserManager):
@@ -155,10 +155,9 @@ class EndUserProfile(models.Model):
 
 
 class Organization(models.Model):
-    """Healthcare organization owning and managing nurses."""
+    """Organization that groups nurses and organization administrators."""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=255, unique=True)
-    code = models.CharField(max_length=50, unique=True)
     description = models.TextField(blank=True, null=True)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -169,7 +168,6 @@ class Organization(models.Model):
         ordering = ['name']
         indexes = [
             models.Index(fields=['name']),
-            models.Index(fields=['code']),
             models.Index(fields=['is_active']),
         ]
 
@@ -178,20 +176,18 @@ class Organization(models.Model):
 
 
 class OrganizationAdministrator(models.Model):
-    """Organization-scoped admin profile."""
+    """Profile that links an organization admin user to an organization."""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.OneToOneField(
         CustomUser,
         on_delete=models.CASCADE,
-        related_name='organization_admin_profile'
+        related_name='organization_admin_profile',
     )
     organization = models.ForeignKey(
         Organization,
         on_delete=models.CASCADE,
-        related_name='administrators'
+        related_name='administrators',
     )
-    job_title = models.CharField(max_length=120, blank=True, null=True)
-    is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -201,7 +197,6 @@ class OrganizationAdministrator(models.Model):
         verbose_name_plural = 'Organization Administrators'
         indexes = [
             models.Index(fields=['organization']),
-            models.Index(fields=['is_active']),
         ]
 
     def __str__(self):
