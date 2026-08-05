@@ -1,11 +1,14 @@
+from django.db.models import Q
 from rest_framework import serializers
 from django.utils import timezone
 from uuid import uuid4
 from jamii_aide.models import (
-    CustomUser, EndUserProfile, HealthcareNurse, FamilyMember,
+    CustomUser, EndUserProfile, Organization, OrganizationAdministrator,
+    HealthcareNurse, FamilyMember,
     AvailabilitySlot, Appointment, HealthRecord,
     Payment, Review, AppointmentStatus, Notification, UserRole,
-    NurseEarning, Organization, OrganizationAdministrator
+    ServiceType, ShiftType, EvaluationType,
+    NurseEarning
 )
 
 # ============ AUTH SERIALIZERS ============
@@ -125,26 +128,39 @@ class EndUserUpdateSerializer(EndUserProfileUpdateSerializer):
 class OrganizationSerializer(serializers.ModelSerializer):
     class Meta:
         model = Organization
-        fields = ['id', 'name', 'description', 'is_active', 'created_at', 'updated_at']
+        fields = ['id', 'name', 'code', 'description', 'is_active', 'created_at', 'updated_at']
         read_only_fields = ['id', 'created_at', 'updated_at']
 
 
 class OrganizationAdministratorSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
-    user_id = serializers.UUIDField(source='user.id', read_only=True)
     organization = OrganizationSerializer(read_only=True)
+    user_id = serializers.PrimaryKeyRelatedField(
+        source='user',
+        queryset=CustomUser.objects.all(),
+        write_only=True,
+        required=False,
+    )
     organization_id = serializers.PrimaryKeyRelatedField(
         source='organization',
         queryset=Organization.objects.filter(is_active=True),
         write_only=True,
+        required=False,
     )
 
     class Meta:
         model = OrganizationAdministrator
         fields = [
-            'id', 'user', 'user_id', 'organization', 'organization_id', 'created_at', 'updated_at'
+            'id', 'user', 'user_id', 'organization', 'organization_id',
+            'job_title', 'is_active', 'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def validate(self, attrs):
+        user = attrs.get('user') or getattr(self.instance, 'user', None)
+        if user and user.role != UserRole.ORGANIZATION_ADMIN:
+            raise serializers.ValidationError({'user_id': 'Selected user must have organization_admin role.'})
+        return attrs
 
 # ============ FAMILY MEMBER SERIALIZERS ============
 
@@ -312,15 +328,20 @@ class AvailabilitySlotSerializer(serializers.ModelSerializer):
 
 class HealthcareNurseSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
+    organization = OrganizationSerializer(read_only=True)
+    organization_id = serializers.PrimaryKeyRelatedField(
+        source='organization',
+        queryset=Organization.objects.filter(is_active=True),
+        required=False,
+        allow_null=True,
+        write_only=True,
+    )
     professional_type_display = serializers.CharField(source='get_professional_type_display', read_only=True)
-    organization_id = serializers.UUIDField(source='organization.id', read_only=True)
-    organization_name = serializers.CharField(source='organization.name', read_only=True)
     
     class Meta:
         model = HealthcareNurse
         fields = [
-            'id', 'user', 'license_number', 'license_expiry',
-            'organization_id', 'organization_name',
+            'id', 'user', 'organization', 'organization_id', 'license_number', 'license_expiry',
             'professional_type', 'professional_type_display',
             'specializations', 'languages', 'years_experience',
             'bio', 'certifications', 'service_areas',
@@ -355,17 +376,19 @@ class HealthcareNurseDetailSerializer(HealthcareNurseSerializer):
         fields = HealthcareNurseSerializer.Meta.fields + ['availability_slots', 'assigned_appointments']
 
     def get_assigned_appointments(self, obj):
-        appointments = obj.appointments.select_related('family_member', 'end_user_profile__user').order_by(
-            'appointment_date',
-            'start_time',
-        )
+        # Match nurse appointment visibility elsewhere: direct assignment OR suggested assignment.
+        appointments = Appointment.objects.filter(
+            Q(nurse=obj) | Q(suggested_nurse=obj)
+        ).select_related(
+            'family_member', 'end_user_profile__user'
+        ).distinct().order_by('appointment_date', 'start_time', 'id')
         return AppointmentScheduleSerializer(appointments, many=True, context=self.context).data
 
 class HealthcareNurseUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = HealthcareNurse
         fields = [
-            'professional_type', 'bio', 'specializations', 'languages', 'service_areas'
+            'organization', 'professional_type', 'bio', 'specializations', 'languages', 'service_areas'
         ]
 
 class HealthcareNurseCreateSerializer(serializers.ModelSerializer):
@@ -409,13 +432,103 @@ class AppointmentCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Appointment
         fields = [
-            'family_member', 'appointment_date',
+            'id', 'family_member', 'appointment_date',
             'start_time', 'end_time', 'reason', 'service_type',
             'shift_type', 'evaluation_type', 'visit_address',
             'visit_city', 'notes', 'additional_notes',
             'admission_clause_accepted', 'admission_support_in_subscription',
             'admission_questionnaire'
         ]
+        read_only_fields = ['id']
+
+    @staticmethod
+    def _normalize_choice_value(value, enum_cls, extra_aliases=None):
+        if value in (None, ''):
+            return value
+
+        text = str(value).strip()
+        if not text:
+            return value
+
+        normalized = text.upper().replace('-', '_').replace(' ', '_')
+        candidates = {
+            normalized,
+            normalized.replace('__', '_'),
+        }
+
+        for choice_value, choice_label in enum_cls.choices:
+            if text == choice_value:
+                return choice_value
+
+            label_normalized = str(choice_label).strip().upper().replace('-', '_').replace(' ', '_')
+            if normalized in {choice_value.upper(), label_normalized}:
+                return choice_value
+
+        if extra_aliases:
+            for canonical, aliases in extra_aliases.items():
+                if normalized == canonical or normalized in aliases:
+                    return canonical
+
+        return value
+
+    def to_internal_value(self, data):
+        if hasattr(data, 'copy'):
+            data = data.copy()
+
+        alias_map = {
+            'member': 'family_member',
+            'memberId': 'family_member',
+            'familyMember': 'family_member',
+            'familyMemberId': 'family_member',
+            'appointmentDate': 'appointment_date',
+            'startTime': 'start_time',
+            'endTime': 'end_time',
+            'serviceType': 'service_type',
+            'shiftType': 'shift_type',
+            'evaluationType': 'evaluation_type',
+            'visitAddress': 'visit_address',
+            'visitCity': 'visit_city',
+            'additionalNotes': 'additional_notes',
+            'admissionClauseAccepted': 'admission_clause_accepted',
+            'admissionSupportInSubscription': 'admission_support_in_subscription',
+            'admissionQuestionnaire': 'admission_questionnaire',
+            'address': 'visit_address',
+            'city': 'visit_city',
+        }
+        for alias, canonical in alias_map.items():
+            value = data.get(alias)
+            if value is not None and data.get(canonical) in (None, ''):
+                data[canonical] = value
+
+        for ignored_key in [
+            'repeatMode', 'repeatUntil', 'repeatUntilDate', 'repeatEvery',
+            'repeatFrequency', 'recurrence', 'recurrenceMode', 'recurrenceEndDate',
+            'generatedDates', 'generatedCount', 'selectedDates',
+        ]:
+            data.pop(ignored_key, None)
+
+        data['service_type'] = self._normalize_choice_value(
+            data.get('service_type'),
+            ServiceType,
+        )
+        data['shift_type'] = self._normalize_choice_value(
+            data.get('shift_type'),
+            ShiftType,
+            extra_aliases={
+                ShiftType.DAILY_PER_HOUR_12H: {'DAILY_12H', '12H', '12_HOURS', 'DAILY_PER_HOUR'},
+                ShiftType.LIVE_IN_24H: {'LIVE_IN', '24H', '24_HOURS', 'LIVE_IN_24'},
+            },
+        )
+        data['evaluation_type'] = self._normalize_choice_value(
+            data.get('evaluation_type'),
+            EvaluationType,
+            extra_aliases={
+                EvaluationType.ONLINE_CALL: {'ONLINE', 'CALL', 'ONLINE_EVALUATION'},
+                EvaluationType.PHYSICAL_VISIT: {'PHYSICAL', 'IN_PERSON', 'PHYSICAL_EVALUATION'},
+            },
+        )
+
+        return super().to_internal_value(data)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
