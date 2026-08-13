@@ -17,6 +17,7 @@ from django_filters.rest_framework import DjangoFilterBackend
 from django.utils import timezone
 from django.db.models import Q, Avg
 from decimal import Decimal
+from datetime import time
 import uuid
 import logging
 
@@ -114,6 +115,20 @@ def is_organization_admin_user(user):
     return user.get_effective_role() == UserRole.ORGANIZATION_ADMIN
 
 
+DEFAULT_WORKING_HOURS = (time(8, 0), time(17, 0))
+
+
+def seed_default_availability(nurse):
+    """Give a newly-approved nurse a default Mon-Fri 8am-5pm schedule if they have none yet."""
+    if AvailabilitySlot.objects.filter(nurse=nurse).exists():
+        return
+    start, end = DEFAULT_WORKING_HOURS
+    AvailabilitySlot.objects.bulk_create([
+        AvailabilitySlot(nurse=nurse, day_of_week=day, start_time=start, end_time=end, is_available=True)
+        for day in range(5)  # Monday-Friday
+    ])
+
+
 def get_end_user_profile(user):
     if not is_end_user(user):
         raise PermissionDenied('Only end users can access this resource.')
@@ -147,10 +162,9 @@ def get_organization_admin_profile(user):
         raise PermissionDenied('Only organization administrators can access this resource.')
     profile = OrganizationAdministrator.objects.select_related('organization').filter(
         user=user,
-        organization__is_active=True,
     ).first()
     if not profile:
-        raise PermissionDenied('No active organization admin profile is linked to this account.')
+        raise PermissionDenied('No organization admin profile is linked to this account.')
     return profile
 
 
@@ -316,7 +330,7 @@ class RegisterView(APIView):
         serializer = RegisterSerializer(data=request.data)
         if serializer.is_valid():
             user = serializer.save()
-            
+
             # Create role-specific profile
             if user.role == UserRole.USER:
                 EndUserProfile.objects.create(
@@ -327,13 +341,22 @@ class RegisterView(APIView):
             elif user.role == UserRole.NURSE:
                 HealthcareNurse.objects.create(
                     user=user,
-                    license_number='',
+                    license_number=f"PENDING-{user.id.hex[:10].upper()}",
                     license_expiry=timezone.now().date(),
                     years_experience=0,
-                    status=NurseStatus.APPROVED,
-                    is_verified=True,
+                    status=NurseStatus.PENDING,
+                    is_verified=False,
                 )
-            
+            elif user.role == UserRole.ORGANIZATION_ADMIN:
+                organization = Organization.objects.create(
+                    name=getattr(user, '_pending_organization_name', '') or f"{user.get_full_name()}'s Organization",
+                    is_active=False,
+                )
+                OrganizationAdministrator.objects.create(
+                    user=user,
+                    organization=organization,
+                )
+
             refresh = RefreshToken.for_user(user)
             return Response({
                 'access_token': str(refresh.access_token),
@@ -509,6 +532,9 @@ class AdminUserViewSet(ApiDebugMixin, viewsets.ModelViewSet):
         if new_role is None:
             raise ValidationError({'role': 'Invalid role provided.'})
 
+        if new_role == UserRole.ADMIN or user.get_effective_role() == UserRole.ADMIN:
+            raise ValidationError({'role': 'Admin role cannot be granted or changed through this action.'})
+
         organization = None
         if new_role == UserRole.ORGANIZATION_ADMIN:
             if not organization_id:
@@ -522,7 +548,7 @@ class AdminUserViewSet(ApiDebugMixin, viewsets.ModelViewSet):
 
         # Ensure the correct profile exists for the new role
         if new_role == UserRole.NURSE:
-            HealthcareNurse.objects.get_or_create(
+            nurse_profile, _ = HealthcareNurse.objects.get_or_create(
                 user=user,
                 defaults={
                     'license_number': f'PENDING-{str(user.id)[:8]}', # Unique placeholder
@@ -533,6 +559,7 @@ class AdminUserViewSet(ApiDebugMixin, viewsets.ModelViewSet):
                     'is_active': True,
                 }
             )
+            seed_default_availability(nurse_profile)
         elif new_role == UserRole.USER:
             EndUserProfile.objects.get_or_create(
                 user=user,
@@ -545,6 +572,53 @@ class AdminUserViewSet(ApiDebugMixin, viewsets.ModelViewSet):
                     'organization': organization,
                 }
             )
+
+        return Response(UserSerializer(user).data)
+
+    @action(detail=True, methods=['post'], url_path='approve')
+    def approve(self, request, pk=None):
+        user = self.get_object()
+        user.is_verified = True
+        user.is_active = True
+        user.save(update_fields=['is_verified', 'is_active'])
+
+        effective_role = user.get_effective_role()
+        if effective_role == UserRole.NURSE:
+            HealthcareNurse.objects.filter(user=user).update(
+                status=NurseStatus.APPROVED,
+                is_verified=True,
+                is_active=True,
+            )
+            nurse_profile = HealthcareNurse.objects.filter(user=user).first()
+            if nurse_profile:
+                seed_default_availability(nurse_profile)
+        elif effective_role == UserRole.ORGANIZATION_ADMIN:
+            org_admin = OrganizationAdministrator.objects.filter(user=user).select_related('organization').first()
+            if org_admin and org_admin.organization:
+                org_admin.organization.is_active = True
+                org_admin.organization.save(update_fields=['is_active'])
+
+        return Response(UserSerializer(user).data)
+
+    @action(detail=True, methods=['post'], url_path='reject')
+    def reject(self, request, pk=None):
+        user = self.get_object()
+        user.is_verified = False
+        user.is_active = False
+        user.save(update_fields=['is_verified', 'is_active'])
+
+        effective_role = user.get_effective_role()
+        if effective_role == UserRole.NURSE:
+            HealthcareNurse.objects.filter(user=user).update(
+                status=NurseStatus.SUSPENDED,
+                is_verified=False,
+                is_active=False,
+            )
+        elif effective_role == UserRole.ORGANIZATION_ADMIN:
+            org_admin = OrganizationAdministrator.objects.filter(user=user).select_related('organization').first()
+            if org_admin and org_admin.organization:
+                org_admin.organization.is_active = False
+                org_admin.organization.save(update_fields=['is_active'])
 
         return Response(UserSerializer(user).data)
 
@@ -657,8 +731,23 @@ class HealthcareNurseViewSet(ApiDebugMixin, viewsets.ModelViewSet):
             nurse.is_verified = True
             nurse.is_active = True
             nurse.save()
+            seed_default_availability(nurse)
             return Response(serializer.data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'], url_path='toggle-availability')
+    def toggle_availability(self, request, pk=None):
+        """Nurse-controlled on/off switch for accepting new auto-matched requests."""
+        nurse = self.get_object()
+        if not (is_admin_user(request.user) or request.user.id == nurse.user_id):
+            raise PermissionDenied('You can only manage your own availability toggle.')
+
+        if 'is_accepting_requests' in request.data:
+            nurse.is_accepting_requests = bool(request.data['is_accepting_requests'])
+        else:
+            nurse.is_accepting_requests = not nurse.is_accepting_requests
+        nurse.save(update_fields=['is_accepting_requests'])
+        return Response(self.get_serializer(nurse).data)
 
     @action(detail=True, methods=['get', 'post'])
     def availability(self, request, pk=None):
@@ -846,6 +935,7 @@ class AppointmentViewSet(ApiDebugMixin, viewsets.ModelViewSet):
             status=NurseStatus.APPROVED,
             is_active=True,
             is_verified=True,
+            is_accepting_requests=True,
         ).select_related('user')
 
         for nurse in queryset:

@@ -248,6 +248,9 @@ class HealthcareNurse(models.Model):
         choices=NurseStatus.choices,
         default=NurseStatus.APPROVED
     )
+    # Nurse-controlled toggle for accepting new auto-matched requests, separate from
+    # is_active (which reflects admin approval/suspension of the account).
+    is_accepting_requests = models.BooleanField(default=True)
     
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

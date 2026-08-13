@@ -17,12 +17,14 @@ class UserSerializer(serializers.ModelSerializer):
     """Serializer for user registration and profile"""
     password = serializers.CharField(write_only=True, min_length=8)
     role = serializers.SerializerMethodField()
-    
+    account_type = serializers.SerializerMethodField()
+    organization_name = serializers.SerializerMethodField()
+
     class Meta:
         model = CustomUser
         fields = [
             'id', 'email', 'phone', 'first_name', 'last_name',
-            'role', 'profile_image', 'is_verified', 'is_active',
+            'role', 'account_type', 'organization_name', 'profile_image', 'is_verified', 'is_active',
             'password', 'created_at'
         ]
         read_only_fields = ['id', 'created_at', 'is_verified', 'is_active']
@@ -33,12 +35,27 @@ class UserSerializer(serializers.ModelSerializer):
     def get_role(self, obj):
         return obj.get_effective_role()
 
+    def get_account_type(self, obj):
+        return obj.get_effective_role().upper()
+
+    def get_organization_name(self, obj):
+        org_admin_profile = getattr(obj, 'organization_admin_profile', None)
+        if org_admin_profile:
+            return org_admin_profile.organization.name
+        nurse_profile = getattr(obj, 'healthcare_nurse', None)
+        if nurse_profile and nurse_profile.organization:
+            return nurse_profile.organization.name
+        return ''
+
     def create(self, validated_data):
         password = validated_data.pop('password')
         user = CustomUser.objects.create(**validated_data)
         user.set_password(password)
         user.save()
         return user
+
+SELF_REGISTERABLE_ROLES = (UserRole.USER, UserRole.NURSE, UserRole.ORGANIZATION_ADMIN)
+
 
 class RegisterSerializer(serializers.Serializer):
     """Register new user"""
@@ -47,6 +64,15 @@ class RegisterSerializer(serializers.Serializer):
     password = serializers.CharField(min_length=8, write_only=True)
     first_name = serializers.CharField()
     last_name = serializers.CharField()
+    role = serializers.CharField(required=False, default=UserRole.USER)
+    organization_name = serializers.CharField(required=False, allow_blank=True, max_length=255)
+
+    def validate_role(self, value):
+        normalized = str(value or '').strip().lower()
+        valid_roles = {choice.value: choice for choice in SELF_REGISTERABLE_ROLES}
+        if normalized not in valid_roles:
+            raise serializers.ValidationError('Invalid role provided.')
+        return valid_roles[normalized]
 
     def validate_email(self, value):
         email = value.strip().lower()
@@ -62,8 +88,20 @@ class RegisterSerializer(serializers.Serializer):
             raise serializers.ValidationError('An account with this phone number already exists.')
         return phone
 
+    def validate(self, attrs):
+        if attrs.get('role') == UserRole.ORGANIZATION_ADMIN:
+            org_name = attrs.get('organization_name', '').strip()
+            if not org_name:
+                raise serializers.ValidationError({'organization_name': 'Organization name is required.'})
+            if Organization.objects.filter(name__iexact=org_name).exists():
+                raise serializers.ValidationError({'organization_name': 'An organization with this name already exists.'})
+            attrs['organization_name'] = org_name
+        return attrs
+
     def create(self, validated_data):
         password = validated_data.pop('password')
+        role = validated_data.pop('role', UserRole.USER)
+        organization_name = validated_data.pop('organization_name', '')
         phone = validated_data.get('phone')
         if phone == '':
             validated_data['phone'] = None
@@ -72,10 +110,14 @@ class RegisterSerializer(serializers.Serializer):
         while CustomUser.objects.filter(username=username).exists():
             username = f"{base_username}_{uuid4().hex[:6]}"
         validated_data['username'] = username
-        validated_data['role'] = UserRole.USER
+        validated_data['role'] = role
+        if role in (UserRole.NURSE, UserRole.ORGANIZATION_ADMIN):
+            validated_data['is_verified'] = False
         user = CustomUser.objects.create(**validated_data)
         user.set_password(password)
         user.save()
+        if role == UserRole.ORGANIZATION_ADMIN:
+            user._pending_organization_name = organization_name
         return user
 
 class LoginSerializer(serializers.Serializer):
@@ -337,7 +379,8 @@ class HealthcareNurseSerializer(serializers.ModelSerializer):
         write_only=True,
     )
     professional_type_display = serializers.CharField(source='get_professional_type_display', read_only=True)
-    
+    availability_status = serializers.SerializerMethodField()
+
     class Meta:
         model = HealthcareNurse
         fields = [
@@ -347,12 +390,42 @@ class HealthcareNurseSerializer(serializers.ModelSerializer):
             'bio', 'certifications', 'service_areas',
             'total_appointments', 'completed_appointments',
             'rating', 'total_reviews', 'is_verified', 'is_active',
+            'is_accepting_requests', 'availability_status',
             'status', 'created_at', 'updated_at'
         ]
         read_only_fields = [
             'id', 'total_appointments', 'completed_appointments',
             'rating', 'total_reviews', 'created_at', 'updated_at'
         ]
+
+    def get_availability_status(self, obj):
+        if not obj.is_accepting_requests:
+            return 'OFFLINE'
+
+        now = timezone.localtime(timezone.now())
+        current_day = now.weekday()
+        current_time = now.time()
+
+        on_duty = obj.availability_slots.filter(
+            day_of_week=current_day,
+            is_available=True,
+            start_time__lte=current_time,
+            end_time__gte=current_time,
+        ).exists()
+        if not on_duty:
+            return 'OFF_DUTY'
+
+        busy = Appointment.objects.filter(
+            nurse=obj,
+            appointment_date=now.date(),
+            status__in=[AppointmentStatus.APPROVED, AppointmentStatus.CONFIRMED],
+            start_time__lte=current_time,
+            end_time__gte=current_time,
+        ).exists()
+        if busy:
+            return 'BUSY'
+
+        return 'AVAILABLE'
 
 
 class AppointmentScheduleSerializer(serializers.ModelSerializer):
