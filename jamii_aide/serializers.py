@@ -754,7 +754,7 @@ class AppointmentUpdateSerializer(serializers.ModelSerializer):
 
 class AppointmentSuggestNurseSerializer(serializers.Serializer):
     suggested_nurse = serializers.PrimaryKeyRelatedField(
-        queryset=HealthcareNurse.objects.filter(status='APPROVED', is_active=True)
+        queryset=HealthcareNurse.objects.filter(status='APPROVED', is_active=True, is_verified=True)
     )
 
 
@@ -763,17 +763,17 @@ class AppointmentDecisionSerializer(serializers.Serializer):
         choices=[AppointmentStatus.APPROVED, AppointmentStatus.REJECTED]
     )
     nurse = serializers.PrimaryKeyRelatedField(
-        queryset=HealthcareNurse.objects.filter(status='APPROVED', is_active=True),
+        queryset=HealthcareNurse.objects.filter(status='APPROVED', is_active=True, is_verified=True),
         required=False,
         allow_null=True,
     )
     assigned_nurse = serializers.PrimaryKeyRelatedField(
-        queryset=HealthcareNurse.objects.filter(status='APPROVED', is_active=True),
+        queryset=HealthcareNurse.objects.filter(status='APPROVED', is_active=True, is_verified=True),
         required=False,
         allow_null=True,
     )
     suggested_nurse = serializers.PrimaryKeyRelatedField(
-        queryset=HealthcareNurse.objects.filter(status='APPROVED', is_active=True),
+        queryset=HealthcareNurse.objects.filter(status='APPROVED', is_active=True, is_verified=True),
         required=False,
         allow_null=True,
     )
