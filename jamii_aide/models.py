@@ -87,6 +87,11 @@ class NotificationEventType(models.TextChoices):
     NURSE_SUGGESTED = "NURSE_SUGGESTED", "Nurse Suggested"
     REQUEST_APPROVED = "REQUEST_APPROVED", "Request Approved"
     REQUEST_REJECTED = "REQUEST_REJECTED", "Request Rejected"
+    NURSE_VERIFIED = "NURSE_VERIFIED", "Nurse Verified"
+    NURSE_REJECTED = "NURSE_REJECTED", "Nurse Rejected"
+    ORGANIZATION_VERIFIED = "ORGANIZATION_VERIFIED", "Organization Verified"
+    ORGANIZATION_REJECTED = "ORGANIZATION_REJECTED", "Organization Rejected"
+    ROLE_CHANGED = "ROLE_CHANGED", "Role Changed"
 
 # ============ CUSTOM USER MODEL ============
 

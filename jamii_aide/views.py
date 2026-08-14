@@ -85,7 +85,7 @@ def enqueue_task_or_run(task, *args, **kwargs):
         )
 
 
-def create_notification(*, recipient, appointment, event_type, title, message):
+def create_notification(*, recipient, event_type, title, message, appointment=None):
     Notification.objects.create(
         recipient=recipient,
         appointment=appointment,
@@ -543,8 +543,17 @@ class AdminUserViewSet(ApiDebugMixin, viewsets.ModelViewSet):
             if not organization:
                 raise ValidationError({'organization_id': 'Invalid organization_id provided.'})
             
+        previous_role = user.get_effective_role()
         user.role = new_role
         user.save(update_fields=['role'])
+
+        if new_role != previous_role:
+            create_notification(
+                recipient=user,
+                event_type=NotificationEventType.ROLE_CHANGED,
+                title='Account Role Updated',
+                message=f'Your account role was changed to {UserRole(new_role).label}.',
+            )
 
         # Ensure the correct profile exists for the new role
         if new_role == UserRole.NURSE:
@@ -592,11 +601,23 @@ class AdminUserViewSet(ApiDebugMixin, viewsets.ModelViewSet):
             nurse_profile = HealthcareNurse.objects.filter(user=user).first()
             if nurse_profile:
                 seed_default_availability(nurse_profile)
+            create_notification(
+                recipient=user,
+                event_type=NotificationEventType.NURSE_VERIFIED,
+                title='Account Verified',
+                message='Your nurse account has been verified. You can now be matched with care requests.',
+            )
         elif effective_role == UserRole.ORGANIZATION_ADMIN:
             org_admin = OrganizationAdministrator.objects.filter(user=user).select_related('organization').first()
             if org_admin and org_admin.organization:
                 org_admin.organization.is_active = True
                 org_admin.organization.save(update_fields=['is_active'])
+            create_notification(
+                recipient=user,
+                event_type=NotificationEventType.ORGANIZATION_VERIFIED,
+                title='Organization Verified',
+                message='Your organization account has been verified and activated.',
+            )
 
         return Response(UserSerializer(user).data)
 
@@ -614,11 +635,23 @@ class AdminUserViewSet(ApiDebugMixin, viewsets.ModelViewSet):
                 is_verified=False,
                 is_active=False,
             )
+            create_notification(
+                recipient=user,
+                event_type=NotificationEventType.NURSE_REJECTED,
+                title='Account Rejected',
+                message='Your nurse account verification was rejected. Contact support for details.',
+            )
         elif effective_role == UserRole.ORGANIZATION_ADMIN:
             org_admin = OrganizationAdministrator.objects.filter(user=user).select_related('organization').first()
             if org_admin and org_admin.organization:
                 org_admin.organization.is_active = False
                 org_admin.organization.save(update_fields=['is_active'])
+            create_notification(
+                recipient=user,
+                event_type=NotificationEventType.ORGANIZATION_REJECTED,
+                title='Organization Rejected',
+                message='Your organization account verification was rejected. Contact support for details.',
+            )
 
         return Response(UserSerializer(user).data)
 
