@@ -15,7 +15,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from django_filters.rest_framework import DjangoFilterBackend
 from django.utils import timezone
-from django.db.models import Q, Avg
+from django.db.models import Q, Avg, Count
 from decimal import Decimal
 from datetime import time
 import socket
@@ -1026,6 +1026,24 @@ class AppointmentViewSet(ApiDebugMixin, viewsets.ModelViewSet):
             is_accepting_requests=True,
         ).select_related('user')
 
+        # nurse.total_appointments only increments on completion, so it stays 0 for every
+        # nurse until visits actually finish — useless as a load-balancing signal for
+        # freshly-assigned work. Count each nurse's current active caseload live instead.
+        active_statuses = [
+            AppointmentStatus.SUBMITTED,
+            AppointmentStatus.UNDER_REVIEW,
+            AppointmentStatus.NURSE_SUGGESTED,
+            AppointmentStatus.APPROVED,
+            AppointmentStatus.PENDING,
+            AppointmentStatus.CONFIRMED,
+        ]
+        active_caseload_by_nurse = dict(
+            Appointment.objects.filter(nurse__in=queryset, status__in=active_statuses)
+            .values('nurse_id')
+            .annotate(count=Count('id'))
+            .values_list('nurse_id', 'count')
+        )
+
         for nurse in queryset:
             if nurse.professional_type not in preferred_types:
                 continue
@@ -1047,16 +1065,17 @@ class AppointmentViewSet(ApiDebugMixin, viewsets.ModelViewSet):
             # service type (e.g. a palliative-care nurse over a general caregiver for
             # chronic-condition visits) — rank by preference position first.
             preference_rank = preferred_types.index(nurse.professional_type)
+            active_caseload = active_caseload_by_nurse.get(nurse.id, 0)
             score = 100 - (preference_rank * 10)
             if matching_service_area:
                 score += 30
             score += int(nurse.rating * 10)
-            score -= nurse.total_appointments * 2
-            primary_candidates.append((score, nurse))
+            score -= active_caseload * 5
+            primary_candidates.append((score, active_caseload, nurse))
 
         if primary_candidates:
-            primary_candidates.sort(key=lambda item: (-item[0], item[1].rating, item[1].total_appointments, item[1].created_at))
-            return primary_candidates[0][1]
+            primary_candidates.sort(key=lambda item: (-item[0], item[1], -item[2].rating, item[2].created_at))
+            return primary_candidates[0][2]
 
         return None
 
