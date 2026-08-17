@@ -19,6 +19,7 @@ from django.db.models import Q, Avg
 from decimal import Decimal
 from datetime import time
 import socket
+import time as time_module
 from urllib.parse import urlparse
 import uuid
 import logging
@@ -58,8 +59,12 @@ from jamii_aide.tasks import send_email_task, send_payment_receipt_task
 logger = logging.getLogger('jamii_aide.appointments')
 
 
+_broker_reachable_cache = {'checked_at': 0.0, 'result': False}
+_BROKER_REACHABLE_CACHE_SECONDS = 15
+
+
 def _broker_reachable(timeout=1):
-    """Raw TCP pre-check for the Celery broker.
+    """Raw TCP pre-check for the Celery broker, cached briefly.
 
     Kombu's own connection-retry logic does not reliably honor
     broker_connection_timeout/socket_connect_timeout on this stack when the
@@ -67,17 +72,30 @@ def _broker_reachable(timeout=1):
     a plain socket connect fails in ~1-2s, but task.delay() can hang for
     100+ seconds retrying internally). Checking reachability ourselves keeps
     every request-path caller of enqueue_task_or_run() fast regardless.
+
+    A single request can trigger several notifications (e.g. appointment
+    submission notifies every admin), so the result is cached for a few
+    seconds to avoid paying the socket-connect cost once per notification.
     """
+    now = time_module.monotonic()
+    if now - _broker_reachable_cache['checked_at'] < _BROKER_REACHABLE_CACHE_SECONDS:
+        return _broker_reachable_cache['result']
+
     try:
         parsed = urlparse(settings.CELERY_BROKER_URL)
         if parsed.scheme == 'memory':
-            return True
-        host = parsed.hostname or 'localhost'
-        port = parsed.port or 6379
-        with socket.create_connection((host, port), timeout=timeout):
-            return True
+            result = True
+        else:
+            host = parsed.hostname or 'localhost'
+            port = parsed.port or 6379
+            with socket.create_connection((host, port), timeout=timeout):
+                result = True
     except OSError:
-        return False
+        result = False
+
+    _broker_reachable_cache['checked_at'] = now
+    _broker_reachable_cache['result'] = result
+    return result
 
 
 def enqueue_task_or_run(task, *args, **kwargs):
