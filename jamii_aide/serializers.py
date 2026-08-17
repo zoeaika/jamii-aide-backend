@@ -461,7 +461,7 @@ class HealthcareNurseUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = HealthcareNurse
         fields = [
-            'organization', 'professional_type', 'bio', 'specializations', 'languages', 'service_areas'
+            'organization', 'professional_type', 'bio', 'specializations', 'languages', 'certifications', 'service_areas'
         ]
 
 class HealthcareNurseCreateSerializer(serializers.ModelSerializer):
