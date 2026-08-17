@@ -1027,7 +1027,7 @@ class AppointmentViewSet(ApiDebugMixin, viewsets.ModelViewSet):
         ).select_related('user')
 
         for nurse in queryset:
-            if nurse.professional_type != preferred_types[0]:
+            if nurse.professional_type not in preferred_types:
                 continue
             if not self._is_available_for_time(nurse, appointment):
                 continue
@@ -1043,7 +1043,11 @@ class AppointmentViewSet(ApiDebugMixin, viewsets.ModelViewSet):
                     matching_service_area = True
                     break
 
-            score = 100
+            # Earlier entries in preferred_types are the stronger clinical fit for this
+            # service type (e.g. a palliative-care nurse over a general caregiver for
+            # chronic-condition visits) — rank by preference position first.
+            preference_rank = preferred_types.index(nurse.professional_type)
+            score = 100 - (preference_rank * 10)
             if matching_service_area:
                 score += 30
             score += int(nurse.rating * 10)
