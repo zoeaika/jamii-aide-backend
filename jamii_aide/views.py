@@ -18,6 +18,8 @@ from django.utils import timezone
 from django.db.models import Q, Avg
 from decimal import Decimal
 from datetime import time
+import socket
+from urllib.parse import urlparse
 import uuid
 import logging
 
@@ -56,8 +58,43 @@ from jamii_aide.tasks import send_email_task, send_payment_receipt_task
 logger = logging.getLogger('jamii_aide.appointments')
 
 
+def _broker_reachable(timeout=1):
+    """Raw TCP pre-check for the Celery broker.
+
+    Kombu's own connection-retry logic does not reliably honor
+    broker_connection_timeout/socket_connect_timeout on this stack when the
+    broker port is silently dropped rather than actively refused (observed:
+    a plain socket connect fails in ~1-2s, but task.delay() can hang for
+    100+ seconds retrying internally). Checking reachability ourselves keeps
+    every request-path caller of enqueue_task_or_run() fast regardless.
+    """
+    try:
+        parsed = urlparse(settings.CELERY_BROKER_URL)
+        if parsed.scheme == 'memory':
+            return True
+        host = parsed.hostname or 'localhost'
+        port = parsed.port or 6379
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
 def enqueue_task_or_run(task, *args, **kwargs):
     """Queue a Celery task; optionally fall back to inline execution."""
+    if not _broker_reachable():
+        logger.error(
+            'Broker unreachable for task=%s. Task skipped without attempting Celery enqueue.',
+            getattr(task, 'name', repr(task)),
+        )
+        if not getattr(settings, 'CELERY_INLINE_FALLBACK', False):
+            return
+        try:
+            task(*args, **kwargs)
+        except Exception:
+            logger.exception('Inline fallback failed for task=%s', getattr(task, 'name', repr(task)))
+        return
+
     try:
         task.delay(*args, **kwargs)
         return
