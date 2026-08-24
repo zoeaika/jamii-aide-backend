@@ -21,14 +21,13 @@ from datetime import time
 import socket
 import time as time_module
 from urllib.parse import urlparse
-import uuid
 import logging
 
 from jamii_aide.models import (
     CustomUser, EndUserProfile, Organization, OrganizationAdministrator,
     HealthcareNurse, FamilyMember,
     AvailabilitySlot, Appointment, HealthRecord,
-    Payment, Review, AppointmentStatus, PaymentStatus, UserRole,
+    Payment, Review, AppointmentStatus, PaymentStatus, PaymentMethod, UserRole,
     NurseStatus, ServiceType, ProfessionalType,
     Notification, NotificationEventType, NurseEarning
 )
@@ -55,6 +54,8 @@ from jamii_aide.forms import SignupForm, LoginForm
 
 from jamii_aide.mixins import ApiDebugMixin
 from jamii_aide.tasks import send_email_task, send_payment_receipt_task
+from jamii_aide.payments import mpesa, pesapal
+from jamii_aide.payments.exceptions import PaymentGatewayError
 
 logger = logging.getLogger('jamii_aide.appointments')
 
@@ -1423,6 +1424,12 @@ class PaymentViewSet(viewsets.ModelViewSet):
             return PaymentInitiateSerializer
         return PaymentSerializer
 
+    def create(self, request, *args, **kwargs):
+        try:
+            return super().create(request, *args, **kwargs)
+        except PaymentGatewayError as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
+
     def perform_create(self, serializer):
         end_user_profile = get_end_user_profile(self.request.user)
         payment = serializer.save(end_user_profile=end_user_profile)
@@ -1437,17 +1444,15 @@ class PaymentViewSet(viewsets.ModelViewSet):
                 raise ValidationError('One or more appointments are not accessible.')
             appointments.update(payment=payment)
 
-        if payment.method == 'MPESA' and not payment.mpesa_transaction_id:
-            payment.mpesa_transaction_id = f"MPESA-{uuid.uuid4()}"
-            payment.save(update_fields=['mpesa_transaction_id'])
-        elif payment.method == 'STRIPE':
-            # TODO: Generate Stripe PaymentIntent here
-            # For now, just placeholder logic
-            pass
-        elif payment.method == 'PESAPAL':
-            # TODO: Submit order to PesaPal API here
-            # For now, just placeholder logic
-            pass
+        if payment.method == PaymentMethod.MPESA:
+            phone_number = serializer.validated_data.get('phone_number') or end_user_profile.user.phone
+            if not phone_number:
+                raise ValidationError(
+                    'A phone number is required for M-Pesa payments and none is on file.'
+                )
+            mpesa.stk_push(payment, phone_number)
+        elif payment.method == PaymentMethod.PESAPAL:
+            pesapal.submit_order(payment, end_user_profile)
 
     @action(
         detail=False,
@@ -1456,38 +1461,37 @@ class PaymentViewSet(viewsets.ModelViewSet):
         authentication_classes=[],
     )
     def mpesa_callback(self, request):
-        """Handle M-Pesa payment callback"""
-        mpesa_id = request.data.get('mpesa_transaction_id')
-        payment = Payment.objects.filter(mpesa_transaction_id=mpesa_id).first()
-        
+        """Handle the M-Pesa Daraja STK push callback"""
+        callback = request.data.get('Body', {}).get('stkCallback', {})
+        checkout_request_id = callback.get('CheckoutRequestID')
+        payment = Payment.objects.filter(provider_reference=checkout_request_id).first()
+
         if not payment:
             return Response(
                 {'status': 'failed', 'message': 'Payment not found'},
                 status=status.HTTP_404_NOT_FOUND
             )
-        
+
+        result_code = callback.get('ResultCode')
+        if result_code != 0:
+            payment.status = PaymentStatus.FAILED
+            payment.failure_reason = callback.get('ResultDesc', 'M-Pesa payment failed')
+            payment.save(update_fields=['status', 'failure_reason', 'updated_at'])
+            return Response({'status': 'failed', 'message': payment.failure_reason})
+
+        metadata_items = callback.get('CallbackMetadata', {}).get('Item', [])
+        metadata = {item.get('Name'): item.get('Value') for item in metadata_items}
+
         payment.status = PaymentStatus.COMPLETED
-        payment.mpesa_receipt_number = request.data.get('mpesa_receipt_number')
+        payment.mpesa_receipt_number = metadata.get('MpesaReceiptNumber')
         payment.transaction_date = timezone.now()
         payment.completed_at = timezone.now()
         payment.save()
-        
+
         # Trigger async task to send receipt email.
         enqueue_task_or_run(send_payment_receipt_task, payment.id)
-        
-        return Response({'status': 'success', 'message': 'Payment processed'})
 
-    @action(
-        detail=False,
-        methods=['post'],
-        permission_classes=[permissions.AllowAny],
-        authentication_classes=[],
-    )
-    def stripe_webhook(self, request):
-        """Handle Stripe payment webhook"""
-        # Placeholder for Stripe webhook logic
-        # You'll need to verify the Stripe signature and process the event
-        return Response({'status': 'success', 'message': 'Stripe webhook received'})
+        return Response({'status': 'success', 'message': 'Payment processed'})
 
     @action(
         detail=False,
@@ -1496,10 +1500,44 @@ class PaymentViewSet(viewsets.ModelViewSet):
         authentication_classes=[],
     )
     def pesapal_ipn(self, request):
-        """Handle PesaPal IPN callback"""
-        # Placeholder for PesaPal IPN logic
-        # Typically involves querying PesaPal for transaction status using tracking ID
-        return Response({'status': 'success', 'message': 'PesaPal IPN received'})
+        """Handle PesaPal's IPN callback"""
+        order_tracking_id = request.query_params.get('OrderTrackingId') or request.data.get('OrderTrackingId')
+        merchant_reference = request.query_params.get('OrderMerchantReference') or request.data.get('OrderMerchantReference')
+
+        payment = Payment.objects.filter(provider_reference=order_tracking_id).first()
+        if not payment:
+            return Response(
+                {'status': 'failed', 'message': 'Payment not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        try:
+            transaction_status = pesapal.get_transaction_status(order_tracking_id)
+        except PaymentGatewayError as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
+
+        status_code = transaction_status.get('status_code')
+        if status_code == pesapal.STATUS_COMPLETED:
+            payment.status = PaymentStatus.COMPLETED
+            payment.transaction_date = timezone.now()
+            payment.completed_at = timezone.now()
+            payment.save()
+            enqueue_task_or_run(send_payment_receipt_task, payment.id)
+        elif status_code in (pesapal.STATUS_FAILED, pesapal.STATUS_INVALID):
+            payment.status = PaymentStatus.FAILED
+            payment.failure_reason = transaction_status.get('payment_status_description', 'PesaPal payment failed')
+            payment.save(update_fields=['status', 'failure_reason', 'updated_at'])
+        elif status_code == pesapal.STATUS_REVERSED:
+            payment.status = PaymentStatus.REFUNDED
+            payment.save(update_fields=['status', 'updated_at'])
+
+        # PesaPal requires this exact echo-back shape in response to an IPN.
+        return Response({
+            'orderNotificationType': 'IPNCHANGE',
+            'orderTrackingId': order_tracking_id,
+            'orderMerchantReference': merchant_reference,
+            'status': 200,
+        })
 
     @action(detail=False, methods=['get'])
     def stats(self, request):

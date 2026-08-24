@@ -138,5 +138,6 @@ class PaymentAdmin(admin.ModelAdmin):
         "description",
         "mpesa_transaction_id",
         "mpesa_receipt_number",
+        "provider_reference",
     )
     readonly_fields = ("created_at", "updated_at", "transaction_date", "completed_at")

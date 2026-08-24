@@ -1733,7 +1733,14 @@ class HealthRecordPaymentReviewFlowTests(APITestCase):
         other_payload = other_list.data.get("results", other_list.data)
         self.assertEqual(other_payload, [])
 
-    def test_end_user_can_initiate_payment_and_stats_aggregate_completed(self):
+    @patch("jamii_aide.views.mpesa.stk_push")
+    def test_end_user_can_initiate_payment_and_stats_aggregate_completed(self, mock_stk_push):
+        def fake_stk_push(payment, phone_number):
+            payment.provider_reference = "ws_CO_TEST123"
+            payment.save(update_fields=["provider_reference"])
+
+        mock_stk_push.side_effect = fake_stk_push
+
         self.client.force_authenticate(user=self.end_user)
 
         payment_response = self.client.post(
@@ -1743,11 +1750,12 @@ class HealthRecordPaymentReviewFlowTests(APITestCase):
                 "method": PaymentMethod.MPESA,
                 "description": "Appointment payment",
                 "appointment_ids": [str(self.appointment.id)],
+                "phone_number": "0712345678",
             },
             format="json",
         )
         self.assertEqual(payment_response.status_code, status.HTTP_201_CREATED)
-        mpesa_id = payment_response.data["mpesa_transaction_id"]
+        checkout_request_id = payment_response.data["provider_reference"]
 
         stats_before = self.client.get(reverse("payment-stats"))
         self.assertEqual(stats_before.status_code, status.HTTP_200_OK)
@@ -1756,7 +1764,21 @@ class HealthRecordPaymentReviewFlowTests(APITestCase):
         self.client.logout()
         callback_response = self.client.post(
             reverse("payment-mpesa-callback"),
-            {"mpesa_transaction_id": mpesa_id, "mpesa_receipt_number": "RCP-001"},
+            {
+                "Body": {
+                    "stkCallback": {
+                        "CheckoutRequestID": checkout_request_id,
+                        "ResultCode": 0,
+                        "ResultDesc": "Success",
+                        "CallbackMetadata": {
+                            "Item": [
+                                {"Name": "Amount", "Value": 2500},
+                                {"Name": "MpesaReceiptNumber", "Value": "RCP-001"},
+                            ]
+                        },
+                    }
+                }
+            },
             format="json",
         )
         self.assertEqual(callback_response.status_code, status.HTTP_200_OK)

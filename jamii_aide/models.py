@@ -69,6 +69,7 @@ class PaymentMethod(models.TextChoices):
     MPESA = "MPESA", "M-Pesa"
     CARD = "CARD", "Card"
     BANK_TRANSFER = "BANK_TRANSFER", "Bank Transfer"
+    PESAPAL = "PESAPAL", "PesaPal"
 
 class NurseStatus(models.TextChoices):
     PENDING = "PENDING", "Pending Review"
@@ -546,9 +547,14 @@ class Payment(models.Model):
     # M-Pesa
     mpesa_transaction_id = models.CharField(max_length=100, blank=True, null=True)
     mpesa_receipt_number = models.CharField(max_length=100, blank=True, null=True)
-    
+
     # Card
     card_last_four = models.CharField(max_length=4, blank=True, null=True)
+
+    # Generic gateway correlation (M-Pesa CheckoutRequestID, PesaPal OrderTrackingID, etc.)
+    provider_reference = models.CharField(max_length=100, blank=True, null=True, db_index=True)
+    # Hosted checkout link the client redirects to (PesaPal, etc.)
+    redirect_url = models.URLField(max_length=500, blank=True, null=True)
     
     description = models.TextField()
     transaction_date = models.DateTimeField(blank=True, null=True, db_index=True)

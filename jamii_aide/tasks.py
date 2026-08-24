@@ -25,9 +25,10 @@ def send_payment_receipt_task(payment_id):
         payment = Payment.objects.select_related('end_user_profile__user').get(id=payment_id)
         user = payment.end_user_profile.user
         if user.email:
+            receipt_number = payment.mpesa_receipt_number or payment.provider_reference or payment.id
             send_mail(
-                subject=f"Payment Receipt: {payment.mpesa_receipt_number}",
-                message=f"Dear {user.first_name or 'User'},\n\nYour payment of KES {payment.amount} was successful.\nM-Pesa Receipt: {payment.mpesa_receipt_number}\n\nThank you for using Jamii Aide.",
+                subject=f"Payment Receipt: {receipt_number}",
+                message=f"Dear {user.first_name or 'User'},\n\nYour payment of {payment.currency} {payment.amount} was successful.\nReceipt: {receipt_number}\n\nThank you for using Jamii Aide.",
                 from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@jamiiaide.com'),
                 recipient_list=[user.email],
                 fail_silently=True,

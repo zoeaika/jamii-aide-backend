@@ -277,6 +277,27 @@ EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD', default='')
 EMAIL_TIMEOUT = config('EMAIL_TIMEOUT', default=20, cast=int)
 DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default='notifications@jamiiaide.com')
 
+# Frontend base URL, used to build redirect/callback URLs for hosted checkout flows.
+FRONTEND_URL = config('FRONTEND_URL', default='http://localhost:3000')
+# This backend's own public base URL, used to build server-to-server webhook/IPN URLs.
+BACKEND_URL = config('BACKEND_URL', default='http://localhost:8000')
+
+# ============ PAYMENT GATEWAYS ============
+
+# M-Pesa (Safaricom Daraja API)
+MPESA_CONSUMER_KEY = config('MPESA_CONSUMER_KEY', default='')
+MPESA_CONSUMER_SECRET = config('MPESA_CONSUMER_SECRET', default='')
+MPESA_SHORTCODE = config('MPESA_SHORTCODE', default='')
+MPESA_PASSKEY = config('MPESA_PASSKEY', default='')
+MPESA_ENV = config('MPESA_ENV', default='sandbox')  # sandbox | production
+MPESA_CALLBACK_URL = config('MPESA_CALLBACK_URL', default='')
+
+# PesaPal
+PESAPAL_CONSUMER_KEY = config('PESAPAL_CONSUMER_KEY', default='')
+PESAPAL_CONSUMER_SECRET = config('PESAPAL_CONSUMER_SECRET', default='')
+PESAPAL_ENV = config('PESAPAL_ENV', default='sandbox')  # sandbox | live
+PESAPAL_IPN_ID = config('PESAPAL_IPN_ID', default='')
+
 # Celery Configuration
 IS_TESTING = 'test' in sys.argv
 CELERY_TASK_ALWAYS_EAGER = env_bool('CELERY_TASK_ALWAYS_EAGER', IS_TESTING or DEBUG)

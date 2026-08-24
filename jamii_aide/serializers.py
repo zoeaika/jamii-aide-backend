@@ -843,12 +843,14 @@ class PaymentSerializer(serializers.ModelSerializer):
             'id', 'end_user_profile', 'amount', 'currency', 'method',
             'method_display', 'status', 'status_display',
             'mpesa_transaction_id', 'mpesa_receipt_number',
-            'card_last_four', 'description', 'transaction_date',
+            'card_last_four', 'provider_reference', 'redirect_url',
+            'description', 'transaction_date',
             'completed_at', 'failure_reason', 'created_at', 'updated_at'
         ]
         read_only_fields = [
             'id', 'created_at', 'updated_at', 'completed_at',
-            'mpesa_transaction_id', 'mpesa_receipt_number'
+            'mpesa_transaction_id', 'mpesa_receipt_number',
+            'provider_reference', 'redirect_url',
         ]
 
 class PaymentInitiateSerializer(serializers.ModelSerializer):
@@ -857,17 +859,20 @@ class PaymentInitiateSerializer(serializers.ModelSerializer):
         many=True,
         required=False
     )
-    
+    phone_number = serializers.CharField(write_only=True, required=False, allow_blank=True)
+
     class Meta:
         model = Payment
         fields = [
             'id', 'amount', 'method', 'description', 'appointment_ids',
-            'status', 'mpesa_transaction_id',
+            'status', 'mpesa_transaction_id', 'provider_reference',
+            'redirect_url', 'phone_number',
         ]
-        read_only_fields = ['id']
+        read_only_fields = ['id', 'provider_reference', 'redirect_url']
 
     def create(self, validated_data):
         validated_data.pop('appointment_ids', None)
+        validated_data.pop('phone_number', None)
         return super().create(validated_data)
 
 # ============ NURSE EARNING SERIALIZERS ============
