@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django.db import models
 from django.contrib.auth.models import AbstractUser, UserManager
 from django.core.validators import MinValueValidator, MaxValueValidator
@@ -46,6 +48,18 @@ class ServiceType(models.TextChoices):
     DAILY_CARE = "DAILY_CARE", "Daily Care"
     LIVE_IN_CARE = "LIVE_IN_CARE", "Live-in Care"
     EMERGENCY_ACCOMPANIMENT = "EMERGENCY_ACCOMPANIMENT", "Emergency Accompaniment"
+
+
+# Flat rate per care tier, in KES. CHRONIC_CONDITION_VISIT is a "starting from"
+# price on the frontend since severity varies, but billed flat here.
+SERVICE_TYPE_PRICES = {
+    ServiceType.WELLNESS_VISIT: Decimal("2500.00"),
+    ServiceType.CARE_VISIT: Decimal("2500.00"),
+    ServiceType.CHRONIC_CONDITION_VISIT: Decimal("4300.00"),
+    ServiceType.DAILY_CARE: Decimal("3000.00"),
+    ServiceType.LIVE_IN_CARE: Decimal("3500.00"),
+    ServiceType.EMERGENCY_ACCOMPANIMENT: Decimal("2500.00"),
+}
 
 
 class EvaluationType(models.TextChoices):

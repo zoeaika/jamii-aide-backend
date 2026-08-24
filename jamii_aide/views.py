@@ -29,7 +29,8 @@ from jamii_aide.models import (
     AvailabilitySlot, Appointment, HealthRecord,
     Payment, Review, AppointmentStatus, PaymentStatus, PaymentMethod, UserRole,
     NurseStatus, ServiceType, ProfessionalType,
-    Notification, NotificationEventType, NurseEarning
+    Notification, NotificationEventType, NurseEarning,
+    SERVICE_TYPE_PRICES
 )
 from jamii_aide.serializers import (
     UserSerializer, RegisterSerializer, LoginSerializer,
@@ -1118,13 +1119,15 @@ class AppointmentViewSet(ApiDebugMixin, viewsets.ModelViewSet):
             )
             raise PermissionDenied('Only end users can submit care requests.')
         end_user_profile = get_end_user_profile(self.request.user)
+        service_type = serializer.validated_data.get('service_type')
         appointment = serializer.save(
             end_user_profile=end_user_profile,
             status=AppointmentStatus.SUBMITTED,
             reviewed_by=None,
             rejection_reason=None,
             decision_at=None,
-            nurse=None
+            nurse=None,
+            amount=SERVICE_TYPE_PRICES.get(service_type, Appointment._meta.get_field('amount').default)
         )
 
         auto_assigned_nurse = self._select_best_nurse(appointment)
