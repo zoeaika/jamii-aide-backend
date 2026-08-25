@@ -1142,7 +1142,10 @@ class AppointmentViewSet(ApiDebugMixin, viewsets.ModelViewSet):
                 appointment=appointment,
                 event_type=NotificationEventType.REQUEST_APPROVED,
                 title='Care Request Approved',
-                message='Your care request has been automatically matched with a suitable nurse.',
+                message=(
+                    'Your care request has been automatically matched with a suitable nurse. '
+                    f'Payment of KES {appointment.amount} is now due to confirm your booking.'
+                ),
             )
             logger.info(
                 'Appointment auto-assigned id=%s nurse=%s service_type=%s city=%s',
@@ -1273,7 +1276,10 @@ class AppointmentViewSet(ApiDebugMixin, viewsets.ModelViewSet):
             appointment.rejection_reason = None
             event_type = NotificationEventType.REQUEST_APPROVED
             title = 'Care Request Approved'
-            message = 'Your care request has been approved and a nurse has been assigned.'
+            message = (
+                'Your care request has been approved and a nurse has been assigned. '
+                f'Payment of KES {appointment.amount} is now due to confirm your booking.'
+            )
         else:
             appointment.status = AppointmentStatus.REJECTED
             appointment.rejection_reason = serializer.validated_data['rejection_reason']
