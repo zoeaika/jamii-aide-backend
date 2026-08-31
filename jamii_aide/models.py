@@ -570,7 +570,7 @@ class Payment(models.Model):
     # Hosted checkout link the client redirects to (PesaPal, etc.)
     redirect_url = models.URLField(max_length=500, blank=True, null=True)
     
-    description = models.TextField()
+    description = models.TextField(blank=True)
     transaction_date = models.DateTimeField(blank=True, null=True, db_index=True)
     completed_at = models.DateTimeField(blank=True, null=True)
     failure_reason = models.TextField(blank=True, null=True)

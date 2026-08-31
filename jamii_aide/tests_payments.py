@@ -41,6 +41,10 @@ class MpesaGatewayTests(TestCase):
             description='Test payment',
         )
 
+    @override_settings(
+        MPESA_CONSUMER_KEY='', MPESA_CONSUMER_SECRET='',
+        MPESA_SHORTCODE='', MPESA_PASSKEY='', MPESA_CALLBACK_URL='',
+    )
     def test_stk_push_raises_when_unconfigured(self):
         with self.assertRaises(PaymentGatewayError):
             mpesa.stk_push(self.payment, '0712345678')

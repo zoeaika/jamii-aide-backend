@@ -17,7 +17,7 @@ from django_filters.rest_framework import DjangoFilterBackend
 from django.utils import timezone
 from django.db.models import Q, Avg, Count
 from decimal import Decimal
-from datetime import time
+from datetime import time, date
 import socket
 import time as time_module
 from urllib.parse import urlparse
@@ -1081,6 +1081,32 @@ class AppointmentViewSet(ApiDebugMixin, viewsets.ModelViewSet):
 
         return None
 
+    @action(detail=False, methods=['get'], url_path='check-availability')
+    def check_availability(self, request):
+        """Report whether any nurse currently matches a candidate slot, without creating an appointment."""
+        service_type = request.query_params.get('service_type', '')
+        appointment_date = request.query_params.get('appointment_date', '')
+        start_time = request.query_params.get('start_time', '')
+        end_time = request.query_params.get('end_time', '')
+        visit_city = request.query_params.get('visit_city', '')
+
+        if not all([service_type, appointment_date, start_time, end_time]):
+            raise ValidationError('service_type, appointment_date, start_time, and end_time are required.')
+
+        try:
+            probe = Appointment(
+                service_type=service_type,
+                visit_city=visit_city,
+                appointment_date=date.fromisoformat(appointment_date),
+                start_time=time.fromisoformat(start_time),
+                end_time=time.fromisoformat(end_time),
+            )
+        except ValueError:
+            raise ValidationError('appointment_date, start_time, and end_time must be valid ISO date/time values.')
+
+        matched_nurse = self._select_best_nurse(probe)
+        return Response({'available': matched_nurse is not None})
+
     def create(self, request, *args, **kwargs):
         logger.info(
             'Appointment create attempt user_id=%s role=%s payload_keys=%s',
@@ -1441,9 +1467,16 @@ class PaymentViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         end_user_profile = get_end_user_profile(self.request.user)
-        payment = serializer.save(end_user_profile=end_user_profile)
-
         appointment_ids = serializer.validated_data.get('appointment_ids') or []
+
+        save_kwargs = {'end_user_profile': end_user_profile}
+        if not serializer.validated_data.get('description'):
+            save_kwargs['description'] = (
+                f'Payment for {len(appointment_ids)} appointment(s)'
+                if appointment_ids else 'Jamii Aide payment'
+            )
+        payment = serializer.save(**save_kwargs)
+
         if appointment_ids:
             appointments = Appointment.objects.filter(
                 id__in=[a.id for a in appointment_ids],
